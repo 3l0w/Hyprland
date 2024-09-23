@@ -3,6 +3,7 @@
 #include "hyprland-input-capture-v1.hpp"
 #include "../protocols/WaylandProtocol.hpp"
 #include "../devices/IKeyboard.hpp"
+#include "WaylandProtocol.hpp"
 #include <hyprutils/math/Vector2D.hpp>
 
 class CInputCaptureProtocol : public IWaylandProtocol {
@@ -31,6 +32,13 @@ class CInputCaptureProtocol : public IWaylandProtocol {
 
     bool active = false;
     //
+    void         sendAbsoluteMotion(const Vector2D& absolutePosition, const Vector2D& delta);
+
+  private:
+    void onManagerResourceDestroy(wl_resource* res);
+    void onCapture(CHyprlandInputCaptureManagerV1* pMgr);
+    void onRelease(CHyprlandInputCaptureManagerV1* pMgr);
+
     std::vector<UP<CHyprlandInputCaptureManagerV1>> m_vManagers;
 };
 

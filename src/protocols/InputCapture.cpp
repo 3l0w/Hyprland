@@ -3,6 +3,10 @@
 #include "managers/SeatManager.hpp"
 #include "render/Renderer.hpp"
 #include <fcntl.h>
+#include "hyprland-input-capture-v1.hpp"
+#include <memory>
+#include <vector>
+#include <wayland-util.h>
 
 CInputCaptureProtocol::CInputCaptureProtocol(const wl_interface* iface, const int& ver, const std::string& name) : IWaylandProtocol(iface, ver, name) {
     ;
