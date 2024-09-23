@@ -378,6 +378,8 @@ protocolnew("staging/single-pixel-buffer" "single-pixel-buffer-v1" false)
 protocolnew("staging/security-context" "security-context-v1" false)
 protocolnew("staging/content-type" "content-type-v1" false)
 
+protocolnew("subprojects/hyprland-protocols/protocols" "hyprland-input-capture-v1"
+            true)
 protocolwayland()
 
 # tools
