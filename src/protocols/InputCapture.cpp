@@ -7,6 +7,9 @@
 #include <memory>
 #include <vector>
 #include <wayland-util.h>
+#include "../devices/IKeyboard.hpp"
+#include "managers/SeatManager.hpp"
+#include <fcntl.h>
 
 CInputCaptureProtocol::CInputCaptureProtocol(const wl_interface* iface, const int& ver, const std::string& name) : IWaylandProtocol(iface, ver, name) {
     ;
@@ -71,6 +74,11 @@ void CInputCaptureProtocol::sendKeymap(SP<IKeyboard> keyboard, const std::unique
 
     if (!keyboard)
         close(fd);
+}
+
+void CInputCaptureProtocol::sendKey(uint32_t keyCode, hyprlandInputCaptureManagerV1KeyState state) {
+    for (const auto& manager : m_vManagers)
+        manager->sendKey(keyCode, state);
 }
 
 void CInputCaptureProtocol::forceRelease() {
