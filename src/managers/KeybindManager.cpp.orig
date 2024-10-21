@@ -15,13 +15,16 @@
 #include "debug/Log.hpp"
 #include "helpers/varlist/VarList.hpp"
 #include "../helpers/signal/Signal.hpp"
-#include "protocols/InputCapture.hpp"
+<<<<<<< HEAD
 #include "../managers/HookSystemManager.hpp"
 #include "../managers/input/InputManager.hpp"
 #include "../managers/LayoutManager.hpp"
 #include "../managers/EventManager.hpp"
 #include "../render/Renderer.hpp"
 #include "../hyprerror/HyprError.hpp"
+=======
+#include "protocols/InputCapture.hpp"
+>>>>>>> d574efc8 (input-capture: impl force release)
 
 #include <optional>
 #include <iterator>
@@ -30,9 +33,7 @@
 #include <cstring>
 
 #include <hyprutils/string/String.hpp>
-#include <hyprutils/os/FileDescriptor.hpp>
 using namespace Hyprutils::String;
-using namespace Hyprutils::OS;
 
 #include <sys/ioctl.h>
 #include <fcntl.h>
@@ -372,7 +373,7 @@ bool CKeybindManager::tryMoveFocusToMonitor(PHLMONITOR monitor) {
     return true;
 }
 
-void CKeybindManager::switchToWindow(PHLWINDOW PWINDOWTOCHANGETO, bool preserveFocusHistory) {
+void CKeybindManager::switchToWindow(PHLWINDOW PWINDOWTOCHANGETO) {
     static auto PFOLLOWMOUSE = CConfigValue<Hyprlang::INT>("input:follow_mouse");
     static auto PNOWARPS     = CConfigValue<Hyprlang::INT>("cursor:no_warps");
 
@@ -391,7 +392,7 @@ void CKeybindManager::switchToWindow(PHLWINDOW PWINDOWTOCHANGETO, bool preserveF
         if (!PWINDOWTOCHANGETO->m_bPinned)
             g_pCompositor->setWindowFullscreenInternal(PLASTWINDOW, FSMODE_NONE);
 
-        g_pCompositor->focusWindow(PWINDOWTOCHANGETO, nullptr, preserveFocusHistory);
+        g_pCompositor->focusWindow(PWINDOWTOCHANGETO);
 
         if (!PWINDOWTOCHANGETO->m_bPinned)
             g_pCompositor->setWindowFullscreenInternal(PWINDOWTOCHANGETO, MODE);
@@ -401,7 +402,7 @@ void CKeybindManager::switchToWindow(PHLWINDOW PWINDOWTOCHANGETO, bool preserveF
         PWINDOWTOCHANGETO->m_vRealSize->warp();
     } else {
         updateRelativeCursorCoords();
-        g_pCompositor->focusWindow(PWINDOWTOCHANGETO, nullptr, preserveFocusHistory);
+        g_pCompositor->focusWindow(PWINDOWTOCHANGETO);
         PWINDOWTOCHANGETO->warpCursor();
 
         // Move mouse focus to the new window if required by current follow_mouse and warp modes
@@ -858,18 +859,19 @@ bool CKeybindManager::handleVT(xkb_keysym_t keysym) {
         const unsigned int TTY = keysym - XKB_KEY_XF86Switch_VT_1 + 1;
 
         // vtnr is bugged for some reason.
-        unsigned int                   ttynum = 0;
-        Hyprutils::OS::CFileDescriptor fd{open("/dev/tty", O_RDONLY | O_NOCTTY)};
-        if (fd.isValid()) {
+        unsigned int ttynum = 0;
+        int          fd;
+        if ((fd = open("/dev/tty", O_RDONLY | O_NOCTTY)) >= 0) {
 #if defined(VT_GETSTATE)
             struct vt_stat st;
-            if (!ioctl(fd.get(), VT_GETSTATE, &st))
+            if (!ioctl(fd, VT_GETSTATE, &st))
                 ttynum = st.v_active;
 #elif defined(VT_GETACTIVE)
             int vt;
-            if (!ioctl(fd.get(), VT_GETACTIVE, &vt))
+            if (!ioctl(fd, VT_GETACTIVE, &vt))
                 ttynum = vt;
 #endif
+            close(fd);
         }
 
         if (ttynum == TTY)
@@ -948,11 +950,11 @@ uint64_t CKeybindManager::spawnRawProc(std::string args, PHLWORKSPACE pInitialWo
         Debug::log(LOG, "Unable to create pipe for fork");
     }
 
-    CFileDescriptor pipeSock[2] = {CFileDescriptor{socket[0]}, CFileDescriptor{socket[1]}};
-
-    pid_t           child, grandchild;
+    pid_t child, grandchild;
     child = fork();
     if (child < 0) {
+        close(socket[0]);
+        close(socket[1]);
         Debug::log(LOG, "Fail to create the first fork");
         return 0;
     }
@@ -971,16 +973,22 @@ uint64_t CKeybindManager::spawnRawProc(std::string args, PHLWORKSPACE pInitialWo
                 setenv(e.first.c_str(), e.second.c_str(), 1);
             }
             setenv("WAYLAND_DISPLAY", g_pCompositor->m_szWLDisplaySocket.c_str(), 1);
+            close(socket[0]);
+            close(socket[1]);
             execl("/bin/sh", "/bin/sh", "-c", args.c_str(), nullptr);
             // exit grandchild
             _exit(0);
         }
-        write(pipeSock[1].get(), &grandchild, sizeof(grandchild));
+        close(socket[0]);
+        write(socket[1], &grandchild, sizeof(grandchild));
+        close(socket[1]);
         // exit child
         _exit(0);
     }
     // run in parent
-    read(pipeSock[0].get(), &grandchild, sizeof(grandchild));
+    close(socket[1]);
+    read(socket[0], &grandchild, sizeof(grandchild));
+    close(socket[0]);
     // clear child and leave grandchild to init
     waitpid(child, nullptr, 0);
     if (grandchild < 0) {
@@ -1478,7 +1486,7 @@ SDispatchResult CKeybindManager::moveFocusTo(std::string args) {
     }
 
     const auto PWINDOWTOCHANGETO = *PFULLCYCLE && PLASTWINDOW->isFullscreen() ?
-        g_pCompositor->getWindowCycle(PLASTWINDOW, true, {}, false, arg != 'd' && arg != 'b' && arg != 'r') :
+        (arg == 'd' || arg == 'b' || arg == 'r' ? g_pCompositor->getNextWindowOnWorkspace(PLASTWINDOW, true) : g_pCompositor->getPrevWindowOnWorkspace(PLASTWINDOW, true)) :
         g_pCompositor->getWindowInDirection(PLASTWINDOW, arg);
 
     // Prioritize focus change within groups if the window is a part of it.
@@ -2226,13 +2234,11 @@ SDispatchResult CKeybindManager::circleNext(std::string arg) {
         floatStatus = true;
 
     const auto  VISIBLE = args.contains("visible") || args.contains("v");
-    const auto  PREV    = args.contains("prev") || args.contains("p") || args.contains("last") || args.contains("l");
-    const auto  NEXT    = args.contains("next") || args.contains("n"); // prev is default in classic alt+tab
-    const auto  HIST    = args.contains("hist") || args.contains("h");
-    const auto& w       = HIST ? g_pCompositor->getWindowCycleHist(g_pCompositor->m_pLastWindow, true, floatStatus, VISIBLE, NEXT) :
-                                 g_pCompositor->getWindowCycle(g_pCompositor->m_pLastWindow.lock(), true, floatStatus, VISIBLE, PREV);
+    const auto& w       = (args.contains("prev") || args.contains("p") || args.contains("last") || args.contains("l")) ?
+              g_pCompositor->getPrevWindowOnWorkspace(g_pCompositor->m_pLastWindow.lock(), true, floatStatus, VISIBLE) :
+              g_pCompositor->getNextWindowOnWorkspace(g_pCompositor->m_pLastWindow.lock(), true, floatStatus, VISIBLE);
 
-    switchToWindow(w, HIST);
+    switchToWindow(w);
 
     return {};
 }
@@ -2627,12 +2633,18 @@ SDispatchResult CKeybindManager::swapnext(std::string arg) {
         g_pCompositor->m_pLastWindow->m_pLastCycledWindow.lock() :
         nullptr;
 
-    const bool NEED_PREV = arg == "last" || arg == "l" || arg == "prev" || arg == "p";
-    toSwap               = g_pCompositor->getWindowCycle(PLASTCYCLED ? PLASTCYCLED : PLASTWINDOW, true, std::nullopt, false, NEED_PREV);
+    if (arg == "last" || arg == "l" || arg == "prev" || arg == "p")
+        toSwap = g_pCompositor->getPrevWindowOnWorkspace(PLASTCYCLED ? PLASTCYCLED : PLASTWINDOW, true);
+    else
+        toSwap = g_pCompositor->getNextWindowOnWorkspace(PLASTCYCLED ? PLASTCYCLED : PLASTWINDOW, true);
 
     // sometimes we may come back to ourselves.
-    if (toSwap == PLASTWINDOW)
-        toSwap = g_pCompositor->getWindowCycle(PLASTWINDOW, true, std::nullopt, false, NEED_PREV);
+    if (toSwap == PLASTWINDOW) {
+        if (arg == "last" || arg == "l" || arg == "prev" || arg == "p")
+            toSwap = g_pCompositor->getPrevWindowOnWorkspace(PLASTWINDOW, true);
+        else
+            toSwap = g_pCompositor->getNextWindowOnWorkspace(PLASTWINDOW, true);
+    }
 
     g_pLayoutManager->getCurrentLayout()->switchWindows(PLASTWINDOW, toSwap);
 
