@@ -44,8 +44,6 @@ void Events::listener_mapWindow(void* owner, void* data) {
     static auto PINACTIVEALPHA     = CConfigValue<Hyprlang::FLOAT>("decoration:inactive_opacity");
     static auto PACTIVEALPHA       = CConfigValue<Hyprlang::FLOAT>("decoration:active_opacity");
     static auto PDIMSTRENGTH       = CConfigValue<Hyprlang::FLOAT>("decoration:dim_strength");
-    static auto PSWALLOW           = CConfigValue<Hyprlang::INT>("misc:enable_swallow");
-    static auto PSWALLOWREGEX      = CConfigValue<std::string>("misc:swallow_regex");
     static auto PNEWTAKESOVERFS    = CConfigValue<Hyprlang::INT>("misc:new_window_takes_over_fullscreen");
     static auto PINITIALWSTRACKING = CConfigValue<Hyprlang::INT>("misc:initial_workspace_tracking");
 
@@ -55,7 +53,7 @@ void Events::listener_mapWindow(void* owner, void* data) {
         PMONITOR = g_pCompositor->m_pLastMonitor.lock();
     }
     auto PWORKSPACE           = PMONITOR->activeSpecialWorkspace ? PMONITOR->activeSpecialWorkspace : PMONITOR->activeWorkspace;
-    PWINDOW->m_iMonitorID     = PMONITOR->ID;
+    PWINDOW->m_pMonitor       = PMONITOR;
     PWINDOW->m_pWorkspace     = PWORKSPACE;
     PWINDOW->m_bIsMapped      = true;
     PWINDOW->m_bReadyToDelete = false;
@@ -146,18 +144,18 @@ void Events::listener_mapWindow(void* owner, void* data) {
                 const auto MONITORSTR = trim(r.szRule.substr(r.szRule.find(' ')));
 
                 if (MONITORSTR == "unset") {
-                    PWINDOW->m_iMonitorID = PMONITOR->ID;
+                    PWINDOW->m_pMonitor = PMONITOR;
                 } else {
                     if (isNumber(MONITORSTR)) {
                         const MONITORID MONITOR = std::stoi(MONITORSTR);
-                        if (!g_pCompositor->getMonitorFromID(MONITOR))
-                            PWINDOW->m_iMonitorID = 0;
+                        if (const auto PM = g_pCompositor->getMonitorFromID(MONITOR); PM)
+                            PWINDOW->m_pMonitor = PM;
                         else
-                            PWINDOW->m_iMonitorID = MONITOR;
+                            PWINDOW->m_pMonitor = g_pCompositor->m_vMonitors.at(0);
                     } else {
                         const auto PMONITOR = g_pCompositor->getMonitorFromName(MONITORSTR);
                         if (PMONITOR)
-                            PWINDOW->m_iMonitorID = PMONITOR->ID;
+                            PWINDOW->m_pMonitor = PMONITOR;
                         else {
                             Debug::log(ERR, "No monitor in monitor {} rule", MONITORSTR);
                             continue;
@@ -165,10 +163,10 @@ void Events::listener_mapWindow(void* owner, void* data) {
                     }
                 }
 
-                const auto PMONITORFROMID = g_pCompositor->getMonitorFromID(PWINDOW->m_iMonitorID);
+                const auto PMONITORFROMID = PWINDOW->m_pMonitor.lock();
 
-                if (PWINDOW->m_iMonitorID != PMONITOR->ID) {
-                    g_pKeybindManager->m_mDispatchers["focusmonitor"](std::to_string(PWINDOW->m_iMonitorID));
+                if (PWINDOW->m_pMonitor != PMONITOR) {
+                    g_pKeybindManager->m_mDispatchers["focusmonitor"](std::to_string(PWINDOW->monitorID()));
                     PMONITOR = PMONITORFROMID;
                 }
                 PWINDOW->m_pWorkspace = PMONITOR->activeSpecialWorkspace ? PMONITOR->activeSpecialWorkspace : PMONITOR->activeWorkspace;
@@ -298,19 +296,19 @@ void Events::listener_mapWindow(void* owner, void* data) {
             auto pWorkspace = g_pCompositor->getWorkspaceByID(REQUESTEDWORKSPACEID);
 
             if (!pWorkspace)
-                pWorkspace = g_pCompositor->createNewWorkspace(REQUESTEDWORKSPACEID, PWINDOW->m_iMonitorID, requestedWorkspaceName);
+                pWorkspace = g_pCompositor->createNewWorkspace(REQUESTEDWORKSPACEID, PWINDOW->monitorID(), requestedWorkspaceName, false);
 
             PWORKSPACE = pWorkspace;
 
             PWINDOW->m_pWorkspace = pWorkspace;
-            PWINDOW->m_iMonitorID = pWorkspace->m_iMonitorID;
+            PWINDOW->m_pMonitor   = pWorkspace->m_pMonitor;
 
-            if (g_pCompositor->getMonitorFromID(PWINDOW->m_iMonitorID)->activeSpecialWorkspace && !pWorkspace->m_bIsSpecialWorkspace)
+            if (PWINDOW->m_pMonitor.lock()->activeSpecialWorkspace && !pWorkspace->m_bIsSpecialWorkspace)
                 workspaceSilent = true;
 
             if (!workspaceSilent) {
                 if (pWorkspace->m_bIsSpecialWorkspace)
-                    g_pCompositor->getMonitorFromID(pWorkspace->m_iMonitorID)->setSpecialWorkspace(pWorkspace);
+                    pWorkspace->m_pMonitor->setSpecialWorkspace(pWorkspace);
                 else if (PMONITOR->activeWorkspaceID() != REQUESTEDWORKSPACEID)
                     g_pKeybindManager->m_mDispatchers["workspace"](requestedWorkspaceName);
 
@@ -322,6 +320,10 @@ void Events::listener_mapWindow(void* owner, void* data) {
 
     PWINDOW->updateWindowData();
 
+    // Verify window swallowing. Get the swallower before calling onWindowCreated(PWINDOW) because getSwallower() wouldn't get it after if PWINDOW gets auto grouped.
+    const auto SWALLOWER  = PWINDOW->getSwallower();
+    PWINDOW->m_pSwallowed = SWALLOWER;
+
     if (PWINDOW->m_bIsFloating) {
         g_pLayoutManager->getCurrentLayout()->onWindowCreated(PWINDOW);
         PWINDOW->m_bCreatedOverFullscreen = true;
@@ -332,13 +334,6 @@ void Events::listener_mapWindow(void* owner, void* data) {
                 try {
 
                     auto stringToFloatClamp = [](const std::string& VALUE, const float CURR, const float REL) {
-                        auto stringToPercentage = [](const std::string& VALUE, const float REL) {
-                            if (VALUE.ends_with('%'))
-                                return (std::stof(VALUE.substr(0, VALUE.length() - 1)) * REL) / 100;
-                            else
-                                return std::stof(VALUE);
-                        };
-
                         if (VALUE.starts_with('<'))
                             return std::min(CURR, stringToPercentage(VALUE.substr(1, VALUE.length() - 1), REL));
                         else if (VALUE.starts_with('>'))
@@ -351,13 +346,13 @@ void Events::listener_mapWindow(void* owner, void* data) {
                     const auto  SIZEXSTR = VALUE.substr(0, VALUE.find(' '));
                     const auto  SIZEYSTR = VALUE.substr(VALUE.find(' ') + 1);
 
-                    const auto  MAXSIZE = g_pXWaylandManager->getMaxSizeForWindow(PWINDOW);
+                    const auto  MAXSIZE = PWINDOW->requestedMaxSize();
 
-                    const float SIZEX =
-                        SIZEXSTR == "max" ? std::clamp(MAXSIZE.x, 20.0, PMONITOR->vecSize.x) : stringToFloatClamp(SIZEXSTR, PWINDOW->m_vRealSize.goal().x, PMONITOR->vecSize.x);
+                    const float SIZEX = SIZEXSTR == "max" ? std::clamp(MAXSIZE.x, MIN_WINDOW_SIZE, PMONITOR->vecSize.x) :
+                                                            stringToFloatClamp(SIZEXSTR, PWINDOW->m_vRealSize.goal().x, PMONITOR->vecSize.x);
 
-                    const float SIZEY =
-                        SIZEYSTR == "max" ? std::clamp(MAXSIZE.y, 20.0, PMONITOR->vecSize.y) : stringToFloatClamp(SIZEYSTR, PWINDOW->m_vRealSize.goal().y, PMONITOR->vecSize.y);
+                    const float SIZEY = SIZEYSTR == "max" ? std::clamp(MAXSIZE.y, MIN_WINDOW_SIZE, PMONITOR->vecSize.y) :
+                                                            stringToFloatClamp(SIZEYSTR, PWINDOW->m_vRealSize.goal().y, PMONITOR->vecSize.y);
 
                     Debug::log(LOG, "Rule size, applying to {}", PWINDOW);
 
@@ -470,18 +465,15 @@ void Events::listener_mapWindow(void* owner, void* data) {
         for (auto const& r : PWINDOW->m_vMatchedRules) {
             if (r.szRule.starts_with("size")) {
                 try {
-                    const auto VALUE    = r.szRule.substr(r.szRule.find(' ') + 1);
-                    const auto SIZEXSTR = VALUE.substr(0, VALUE.find(' '));
-                    const auto SIZEYSTR = VALUE.substr(VALUE.find(' ') + 1);
+                    const auto  VALUE    = r.szRule.substr(r.szRule.find(' ') + 1);
+                    const auto  SIZEXSTR = VALUE.substr(0, VALUE.find(' '));
+                    const auto  SIZEYSTR = VALUE.substr(VALUE.find(' ') + 1);
 
-                    const auto MAXSIZE = g_pXWaylandManager->getMaxSizeForWindow(PWINDOW);
+                    const auto  MAXSIZE = PWINDOW->requestedMaxSize();
 
-                    const auto SIZEX = SIZEXSTR == "max" ?
-                        std::clamp(MAXSIZE.x, 20.0, PMONITOR->vecSize.x) :
-                        (!SIZEXSTR.contains('%') ? std::stoi(SIZEXSTR) : std::stof(SIZEXSTR.substr(0, SIZEXSTR.length() - 1)) * 0.01 * PMONITOR->vecSize.x);
-                    const auto SIZEY = SIZEYSTR == "max" ?
-                        std::clamp(MAXSIZE.y, 20.0, PMONITOR->vecSize.y) :
-                        (!SIZEYSTR.contains('%') ? std::stoi(SIZEYSTR) : std::stof(SIZEYSTR.substr(0, SIZEYSTR.length() - 1)) * 0.01 * PMONITOR->vecSize.y);
+                    const float SIZEX = SIZEXSTR == "max" ? std::clamp(MAXSIZE.x, MIN_WINDOW_SIZE, PMONITOR->vecSize.x) : stringToPercentage(SIZEXSTR, PMONITOR->vecSize.x);
+
+                    const float SIZEY = SIZEYSTR == "max" ? std::clamp(MAXSIZE.y, MIN_WINDOW_SIZE, PMONITOR->vecSize.y) : stringToPercentage(SIZEYSTR, PMONITOR->vecSize.y);
 
                     Debug::log(LOG, "Rule size (tiled), applying to {}", PWINDOW);
 
@@ -567,20 +559,12 @@ void Events::listener_mapWindow(void* owner, void* data) {
             g_pCompositor->focusWindow(nullptr);
     }
 
-    // verify swallowing
-    if (*PSWALLOW && std::string{*PSWALLOWREGEX} != STRVAL_EMPTY) {
-        const auto SWALLOWER = PWINDOW->getSwallower();
-
-        if (SWALLOWER) {
-            // swallow
-            PWINDOW->m_pSwallowed = SWALLOWER;
-
-            g_pLayoutManager->getCurrentLayout()->onWindowRemoved(SWALLOWER);
-
-            SWALLOWER->setHidden(true);
-
-            g_pLayoutManager->getCurrentLayout()->recalculateMonitor(PWINDOW->m_iMonitorID);
-        }
+    // swallow
+    if (SWALLOWER) {
+        g_pLayoutManager->getCurrentLayout()->onWindowRemoved(SWALLOWER);
+        g_pHyprRenderer->damageWindow(SWALLOWER);
+        SWALLOWER->setHidden(true);
+        g_pLayoutManager->getCurrentLayout()->recalculateMonitor(PWINDOW->monitorID());
     }
 
     PWINDOW->m_bFirstMap = false;
@@ -641,7 +625,7 @@ void Events::listener_unmapWindow(void* owner, void* data) {
         return;
     }
 
-    const auto PMONITOR = g_pCompositor->getMonitorFromID(PWINDOW->m_iMonitorID);
+    const auto PMONITOR = PWINDOW->m_pMonitor.lock();
     if (PMONITOR) {
         PWINDOW->m_vOriginalClosedPos     = PWINDOW->m_vRealPosition.value() - PMONITOR->vecPosition;
         PWINDOW->m_vOriginalClosedSize    = PWINDOW->m_vRealSize.value();
@@ -662,7 +646,13 @@ void Events::listener_unmapWindow(void* owner, void* data) {
     // swallowing
     if (valid(PWINDOW->m_pSwallowed)) {
         PWINDOW->m_pSwallowed->setHidden(false);
+
+        if (PWINDOW->m_sGroupData.pNextWindow.lock())
+            PWINDOW->m_pSwallowed->m_bGroupSwallowed = true; // flag for the swallowed window to be created into the group where it belongs when auto_group = false.
+
         g_pLayoutManager->getCurrentLayout()->onWindowCreated(PWINDOW->m_pSwallowed.lock());
+
+        PWINDOW->m_pSwallowed->m_bGroupSwallowed = false;
         PWINDOW->m_pSwallowed.reset();
     }
 
@@ -686,6 +676,8 @@ void Events::listener_unmapWindow(void* owner, void* data) {
         PWORKSPACE->m_bHasFullscreenWindow = false;
 
     g_pLayoutManager->getCurrentLayout()->onWindowRemoved(PWINDOW);
+
+    g_pHyprRenderer->damageWindow(PWINDOW);
 
     // do this after onWindowRemoved because otherwise it'll think the window is invalid
     PWINDOW->m_bIsMapped = false;
@@ -726,8 +718,6 @@ void Events::listener_unmapWindow(void* owner, void* data) {
 
     g_pCompositor->addToFadingOutSafe(PWINDOW);
 
-    g_pHyprRenderer->damageMonitor(g_pCompositor->getMonitorFromID(PWINDOW->m_iMonitorID));
-
     if (!PWINDOW->m_bX11DoesntWantBorders)                                                    // don't animate out if they weren't animated in.
         PWINDOW->m_vRealPosition = PWINDOW->m_vRealPosition.value() + Vector2D(0.01f, 0.01f); // it has to be animated, otherwise onWindowPostCreateClose will ignore it
 
@@ -763,8 +753,8 @@ void Events::listener_commitWindow(void* owner, void* data) {
     PWINDOW->m_vReportedSize = PWINDOW->m_vPendingReportedSize; // apply pending size. We pinged, the window ponged.
 
     if (!PWINDOW->m_bIsX11 && !PWINDOW->isFullscreen() && PWINDOW->m_bIsFloating) {
-        const auto MINSIZE = PWINDOW->m_pXDGSurface->toplevel->current.minSize;
-        const auto MAXSIZE = PWINDOW->m_pXDGSurface->toplevel->current.maxSize;
+        const auto MINSIZE = PWINDOW->m_pXDGSurface->toplevel->layoutMinSize();
+        const auto MAXSIZE = PWINDOW->m_pXDGSurface->toplevel->layoutMaxSize();
 
         PWINDOW->clampWindowSize(MINSIZE, MAXSIZE > Vector2D{1, 1} ? std::optional<Vector2D>{MAXSIZE} : std::nullopt);
         g_pHyprRenderer->damageWindow(PWINDOW);
@@ -773,7 +763,7 @@ void Events::listener_commitWindow(void* owner, void* data) {
     if (!PWINDOW->m_pWorkspace->m_bVisible)
         return;
 
-    const auto PMONITOR = g_pCompositor->getMonitorFromID(PWINDOW->m_iMonitorID);
+    const auto PMONITOR = PWINDOW->m_pMonitor.lock();
 
     if (PMONITOR)
         PMONITOR->debugLastPresentation(g_pSeatManager->isPointerFrameCommit ? "listener_commitWindow skip" : "listener_commitWindow");
@@ -911,7 +901,7 @@ void Events::listener_unmanagedSetGeometry(void* owner, void* data) {
             PWINDOW->m_vRealSize.setValueAndWarp(PWINDOW->m_pXWaylandSurface->geometry.size());
 
         if (*PXWLFORCESCALEZERO) {
-            if (const auto PMONITOR = g_pCompositor->getMonitorFromID(PWINDOW->m_iMonitorID); PMONITOR) {
+            if (const auto PMONITOR = PWINDOW->m_pMonitor.lock(); PMONITOR) {
                 PWINDOW->m_vRealSize.setValueAndWarp(PWINDOW->m_vRealSize.goal() / PMONITOR->scale);
             }
         }

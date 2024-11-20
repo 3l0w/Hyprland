@@ -23,22 +23,19 @@
 #include <toml++/toml.hpp>
 
 #include <hyprutils/string/String.hpp>
+#include <hyprutils/os/Process.hpp>
 using namespace Hyprutils::String;
+using namespace Hyprutils::OS;
 
 static std::string execAndGet(std::string cmd) {
     cmd += " 2>&1";
-    std::array<char, 128> buffer;
-    std::string           result;
-    using PcloseType = int (*)(FILE*);
-    const std::unique_ptr<FILE, PcloseType> pipe(popen(cmd.c_str(), "r"), static_cast<PcloseType>(pclose));
-    if (!pipe)
-        return "";
 
-    result.reserve(buffer.size());
-    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-        result += buffer.data();
-    }
-    return result;
+    CProcess proc("/bin/sh", {"-c", cmd});
+
+    if (!proc.runSync())
+        return "error";
+
+    return proc.stdOut();
 }
 
 SHyprlandVersion CPluginManager::getHyprlandVersion() {
@@ -275,7 +272,7 @@ bool CPluginManager::addNewPluginRepo(const std::string& url, const std::string&
         }
 
         if (m_bVerbose)
-            std::println("{}", verboseString("shell returned: " + out));
+            std::println("{}", verboseString("shell returned: {}", out));
 
         if (!std::filesystem::exists(m_szWorkingPluginDirectory + "/" + p.output)) {
             progress.printMessageAbove(failureString("Plugin {} failed to build.\n"

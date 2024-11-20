@@ -104,6 +104,30 @@ inline static const std::vector<SConfigOptionDescription> CONFIG_OPTIONS = {
         .type        = CONFIG_OPTION_INT,
         .data        = SConfigOptionDescription::SRangeData{0, 0, 4},
     },
+    SConfigOptionDescription{
+        .value       = "general:snap:enabled",
+        .description = "enable snapping for floating windows",
+        .type        = CONFIG_OPTION_BOOL,
+        .data        = SConfigOptionDescription::SBoolData{false},
+    },
+    SConfigOptionDescription{
+        .value       = "general:snap:window_gap",
+        .description = "minimum gap in pixels between windows before snapping",
+        .type        = CONFIG_OPTION_INT,
+        .data        = SConfigOptionDescription::SRangeData{10, 0, 100},
+    },
+    SConfigOptionDescription{
+        .value       = "general:snap:monitor_gap",
+        .description = "minimum gap in pixels between window and monitor edges before snapping",
+        .type        = CONFIG_OPTION_INT,
+        .data        = SConfigOptionDescription::SRangeData{10, 0, 100},
+    },
+    SConfigOptionDescription{
+        .value       = "general:snap:border_overlap",
+        .description = "if true, windows snap such that only one border's worth of space is between them",
+        .type        = CONFIG_OPTION_BOOL,
+        .data        = SConfigOptionDescription::SBoolData{false},
+    },
 
     /*
      * decoration:
@@ -134,49 +158,55 @@ inline static const std::vector<SConfigOptionDescription> CONFIG_OPTIONS = {
         .data        = SConfigOptionDescription::SFloatData{1, 0, 1},
     },
     SConfigOptionDescription{
-        .value       = "decoration:drop_shadow",
+        .value       = "decoration:shadow:enabled",
         .description = "enable drop shadows on windows",
         .type        = CONFIG_OPTION_BOOL,
         .data        = SConfigOptionDescription::SBoolData{true},
     },
     SConfigOptionDescription{
-        .value       = "decoration:shadow_range",
+        .value       = "decoration:shadow:range",
         .description = "Shadow range (size) in layout px",
         .type        = CONFIG_OPTION_INT,
         .data        = SConfigOptionDescription::SRangeData{4, 0, 100},
     },
     SConfigOptionDescription{
-        .value       = "decoration:shadow_render_power",
+        .value       = "decoration:shadow:render_power",
         .description = "in what power to render the falloff (more power, the faster the falloff) [1 - 4]",
         .type        = CONFIG_OPTION_INT,
         .data        = SConfigOptionDescription::SRangeData{3, 1, 4},
     },
     SConfigOptionDescription{
-        .value       = "decoration:shadow_ignore_window",
+        .value       = "decoration:shadow:sharp",
+        .description = "whether the shadow should be sharp or not. Akin to an infinitely high render power.",
+        .type        = CONFIG_OPTION_BOOL,
+        .data        = SConfigOptionDescription::SBoolData{false},
+    },
+    SConfigOptionDescription{
+        .value       = "decoration:shadow:ignore_window",
         .description = "if true, the shadow will not be rendered behind the window itself, only around it.",
         .type        = CONFIG_OPTION_BOOL,
         .data        = SConfigOptionDescription::SBoolData{true},
     },
     SConfigOptionDescription{
-        .value       = "decoration:col.shadow",
+        .value       = "decoration:shadow:color",
         .description = "shadow's color. Alpha dictates shadow's opacity.",
         .type        = CONFIG_OPTION_COLOR,
         .data        = SConfigOptionDescription::SColorData{0xee1a1a1a},
     },
     SConfigOptionDescription{
-        .value       = "decoration:col.shadow_inactive",
+        .value       = "decoration:shadow:color_inactive",
         .description = "inactive shadow color. (if not set, will fall back to col.shadow)",
         .type        = CONFIG_OPTION_COLOR,
-        .data        = SConfigOptionDescription::SColorData{}, //##TODO UNSET?
+        .data        = SConfigOptionDescription::SColorData{}, //TODO: UNSET?
     },
     SConfigOptionDescription{
-        .value       = "decoration:shadow_offset",
+        .value       = "decoration:shadow:offset",
         .description = "shadow's rendering offset.",
         .type        = CONFIG_OPTION_VECTOR,
         .data        = SConfigOptionDescription::SVectorData{{}, {-250, -250}, {250, 250}},
     },
     SConfigOptionDescription{
-        .value       = "decoration:shadow_scale",
+        .value       = "decoration:shadow:scale",
         .description = "shadow's scale. [0.0 - 1.0]",
         .type        = CONFIG_OPTION_FLOAT,
         .data        = SConfigOptionDescription::SFloatData{1, 0, 1},
@@ -238,7 +268,7 @@ inline static const std::vector<SConfigOptionDescription> CONFIG_OPTIONS = {
         .value       = "blur:ignore_opacity",
         .description = "make the blur layer ignore the opacity of the window",
         .type        = CONFIG_OPTION_BOOL,
-        .data        = SConfigOptionDescription::SBoolData{false},
+        .data        = SConfigOptionDescription::SBoolData{true},
     },
     SConfigOptionDescription{
         .value       = "blur:new_optimizations",
@@ -590,15 +620,21 @@ inline static const std::vector<SConfigOptionDescription> CONFIG_OPTIONS = {
     },
     SConfigOptionDescription{
         .value       = "input:tablet:output",
-        .description = "the monitor to bind tablets. Empty means unbound..",
+        .description = "the monitor to bind tablets. Can be current or a monitor name. Leave empty to map across all monitors.",
         .type        = CONFIG_OPTION_STRING_SHORT,
         .data        = SConfigOptionDescription::SStringData{""}, //##TODO UNSET?
     },
     SConfigOptionDescription{
         .value       = "input:tablet:region_position",
-        .description = "position of the mapped region in monitor layout.",
+        .description = "position of the mapped region in monitor layout relative to the top left corner of the bound monitor or all monitors.",
         .type        = CONFIG_OPTION_VECTOR,
         .data        = SConfigOptionDescription::SVectorData{{}, {-20000, -20000}, {20000, 20000}},
+    },
+    SConfigOptionDescription{
+        .value       = "input:tablet:absolute_region_position",
+        .description = "whether to treat the region_position as an absolute position in monitor layout. Only applies when output is empty.",
+        .type        = CONFIG_OPTION_BOOL,
+        .data        = SConfigOptionDescription::SBoolData{false},
     },
     SConfigOptionDescription{
         .value       = "input:tablet:region_size",
@@ -749,6 +785,12 @@ inline static const std::vector<SConfigOptionDescription> CONFIG_OPTIONS = {
         .data        = SConfigOptionDescription::SBoolData{true},
     },
     SConfigOptionDescription{
+        .value       = "group:merge_groups_on_groupbar",
+        .description = "whether one group will be merged with another when dragged into its groupbar",
+        .type        = CONFIG_OPTION_BOOL,
+        .data        = SConfigOptionDescription::SBoolData{true},
+    },
+    SConfigOptionDescription{
         .value       = "general:col.border_active",
         .description = "border color for inactive windows",
         .type        = CONFIG_OPTION_GRADIENT,
@@ -787,6 +829,12 @@ inline static const std::vector<SConfigOptionDescription> CONFIG_OPTIONS = {
     SConfigOptionDescription{
         .value       = "group:merge_floated_into_tiled_on_groupbar",
         .description = "whether dragging a floating window into a tiled window groupbar will merge them",
+        .type        = CONFIG_OPTION_BOOL,
+        .data        = SConfigOptionDescription::SBoolData{false},
+    },
+    SConfigOptionDescription{
+        .value       = "group:group_on_movetoworkspace",
+        .description = "whether using movetoworkspace[silent] will merge the window into the workspace's solitary unlocked group",
         .type        = CONFIG_OPTION_BOOL,
         .data        = SConfigOptionDescription::SBoolData{false},
     },
@@ -1073,6 +1121,12 @@ inline static const std::vector<SConfigOptionDescription> CONFIG_OPTIONS = {
         .type        = CONFIG_OPTION_BOOL,
         .data        = SConfigOptionDescription::SBoolData{false},
     },
+    SConfigOptionDescription{
+        .value       = "misc:lockdead_screen_delay",
+        .description = "the delay in ms after the lockdead screen appears if the lock screen did not appear after a lock event occurred.",
+        .type        = CONFIG_OPTION_INT,
+        .data        = SConfigOptionDescription::SRangeData{1000, 0, 5000},
+    },
 
     /*
      * binds:
@@ -1220,8 +1274,8 @@ inline static const std::vector<SConfigOptionDescription> CONFIG_OPTIONS = {
     SConfigOptionDescription{
         .value       = "cursor:no_hardware_cursors",
         .description = "disables hardware cursors",
-        .type        = CONFIG_OPTION_BOOL,
-        .data        = SConfigOptionDescription::SBoolData{false},
+        .type        = CONFIG_OPTION_CHOICE,
+        .data        = SConfigOptionDescription::SChoiceData{0, "Disabled,Enabled,Auto"},
     },
     SConfigOptionDescription{
         .value       = "cursor:no_break_fs_vrr",
@@ -1302,8 +1356,8 @@ inline static const std::vector<SConfigOptionDescription> CONFIG_OPTIONS = {
         .data        = SConfigOptionDescription::SBoolData{true},
     },
     SConfigOptionDescription{
-        .value       = "cursor:allow_dumb_copy",
-        .description = "Makes HW cursors work on Nvidia, at the cost of a possible hitch whenever the image changes",
+        .value       = "cursor:use_cpu_buffer",
+        .description = "Makes HW cursors use a CPU buffer. Required on Nvidia to have HW cursors. Experimental",
         .type        = CONFIG_OPTION_BOOL,
         .data        = SConfigOptionDescription::SBoolData{false},
     },

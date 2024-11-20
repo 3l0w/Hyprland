@@ -144,6 +144,13 @@ class CWindowOverridableVar {
             unset(priority);
     }
 
+    operator std::optional<T>() {
+        if (hasValue())
+            return value();
+        else
+            return std::nullopt;
+    }
+
   private:
     std::map<eOverridePriority, T> values;
     T                              defaultValue; // used for toggling, so required for bool
@@ -272,12 +279,12 @@ class CWindow {
     bool             m_bDraggingTiled   = false; // for dragging around tiled windows
     bool             m_bWasMaximized    = false;
     sFullscreenState m_sFullscreenState = {.internal = FSMODE_NONE, .client = FSMODE_NONE};
-    MONITORID        m_iMonitorID       = -1;
     std::string      m_szTitle          = "";
     std::string      m_szClass          = "";
     std::string      m_szInitialTitle   = "";
     std::string      m_szInitialClass   = "";
     PHLWORKSPACE     m_pWorkspace;
+    PHLMONITORREF    m_pMonitor;
 
     bool             m_bIsMapped = false;
 
@@ -357,6 +364,7 @@ class CWindow {
 
     // swallowing
     PHLWINDOWREF m_pSwallowed;
+    bool         m_bGroupSwallowed = false;
 
     // focus stuff
     bool m_bStayFocused = false;
@@ -398,7 +406,6 @@ class CWindow {
     CBox                   getFullWindowBoundingBox();
     SBoxExtents            getFullWindowExtents();
     CBox                   getWindowBoxUnified(uint64_t props);
-    CBox                   getWindowMainSurfaceBox();
     CBox                   getWindowIdealBoundingBoxIgnoreReserved();
     void                   addWindowDeco(std::unique_ptr<IHyprWindowDecoration> deco);
     void                   updateWindowDecos();
@@ -426,23 +433,20 @@ class CWindow {
     void                   setSuspended(bool suspend);
     bool                   visibleOnMonitor(PHLMONITOR pMonitor);
     WORKSPACEID            workspaceID();
+    MONITORID              monitorID();
     bool                   onSpecialWorkspace();
     void                   activate(bool force = false);
     int                    surfacesCount();
     void                   clampWindowSize(const std::optional<Vector2D> minSize, const std::optional<Vector2D> maxSize);
-
     bool                   isFullscreen();
     bool                   isEffectiveInternalFSMode(const eFullscreenMode);
-
     int                    getRealBorderSize();
     void                   updateWindowData();
     void                   updateWindowData(const struct SWorkspaceRule&);
-
     void                   onBorderAngleAnimEnd(void* ptr);
     bool                   isInCurvedCorner(double x, double y);
     bool                   hasPopupAt(const Vector2D& pos);
     int                    popupsCount();
-
     void                   applyGroupRules();
     void                   createGroup();
     void                   destroyGroup();
@@ -470,6 +474,12 @@ class CWindow {
     void                   unsetWindowData(eOverridePriority priority);
     bool                   isX11OverrideRedirect();
     bool                   isModal();
+    Vector2D               requestedMinSize();
+    Vector2D               requestedMaxSize();
+
+    inline CBox            getWindowMainSurfaceBox() const {
+        return {m_vRealPosition.value().x, m_vRealPosition.value().y, m_vRealSize.value().x, m_vRealSize.value().y};
+    }
 
     // listeners
     void onAck(uint32_t serial);
@@ -556,7 +566,7 @@ struct std::formatter<PHLWINDOW, CharT> : std::formatter<CharT> {
         if (formatWorkspace)
             std::format_to(out, ", workspace: {}", w->m_pWorkspace ? w->workspaceID() : WORKSPACE_INVALID);
         if (formatMonitor)
-            std::format_to(out, ", monitor: {}", w->m_iMonitorID);
+            std::format_to(out, ", monitor: {}", w->monitorID());
         if (formatClass)
             std::format_to(out, ", class: {}", w->m_szClass);
         return std::format_to(out, "]");

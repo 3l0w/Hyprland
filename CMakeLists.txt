@@ -15,6 +15,7 @@ include(GNUInstallDirs)
 set(HYPRLAND_VERSION ${VER})
 set(PREFIX ${CMAKE_INSTALL_PREFIX})
 set(INCLUDEDIR ${CMAKE_INSTALL_INCLUDEDIR})
+set(BINDIR ${CMAKE_INSTALL_BINDIR})
 configure_file(hyprland.pc.in hyprland.pc @ONLY)
 
 set(CMAKE_MESSAGE_LOG_LEVEL "STATUS")
@@ -100,9 +101,9 @@ else()
 endif()
 find_package(OpenGL REQUIRED COMPONENTS ${GLES_VERSION})
 
-pkg_check_modules(hyprctl_deps REQUIRED IMPORTED_TARGET hyprutils>=0.2.1)
+pkg_check_modules(hyprctl_deps REQUIRED IMPORTED_TARGET hyprutils>=0.2.4)
 
-pkg_check_modules(aquamarine_dep REQUIRED IMPORTED_TARGET aquamarine>=0.4.2)
+pkg_check_modules(aquamarine_dep REQUIRED IMPORTED_TARGET aquamarine>=0.4.5)
 
 add_compile_definitions(AQUAMARINE_VERSION="${aquamarine_dep_VERSION}")
 
@@ -221,6 +222,15 @@ if(NO_SYSTEMD)
 else()
   message(STATUS "SYSTEMD support is requested (NO_SYSTEMD not defined)...")
   add_compile_definitions(USES_SYSTEMD)
+
+  # session file -uwsm
+  if(NO_UWSM)
+    message(STATUS "UWSM support is disabled...")
+  else()
+    message(STATUS "UWSM support is enabled (NO_UWSM not defined)...")
+    install(FILES ${CMAKE_SOURCE_DIR}/systemd/hyprland-uwsm.desktop
+            DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/wayland-sessions)
+  endif()
 endif()
 
 set(CPACK_PROJECT_NAME ${PROJECT_NAME})

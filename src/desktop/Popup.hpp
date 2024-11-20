@@ -41,6 +41,7 @@ class CPopup {
 
     //
     SP<CWLSurface> m_pWLSurface;
+    bool           m_bMapped = false;
 
   private:
     // T1 owners, each popup has to have one of these
@@ -57,8 +58,7 @@ class CPopup {
 
     bool                  m_bRequestedReposition = false;
 
-    bool                  m_bInert  = false;
-    bool                  m_bMapped = false;
+    bool                  m_bInert = false;
 
     //
     std::vector<SP<CPopup>>      m_vChildren;
@@ -81,5 +81,5 @@ class CPopup {
 
     Vector2D    localToGlobal(const Vector2D& rel);
     Vector2D    t1ParentCoords();
-    static void bfHelper(std::vector<CPopup*> nodes, std::function<void(CPopup*, void*)> fn, void* data);
+    static void bfHelper(std::vector<CPopup*> const& nodes, std::function<void(CPopup*, void*)> fn, void* data);
 };

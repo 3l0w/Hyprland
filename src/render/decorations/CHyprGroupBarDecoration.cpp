@@ -94,7 +94,7 @@ void CHyprGroupBarDecoration::damageEntire() {
     g_pHyprRenderer->damageBox(&box);
 }
 
-void CHyprGroupBarDecoration::draw(PHLMONITOR pMonitor, float a) {
+void CHyprGroupBarDecoration::draw(PHLMONITOR pMonitor, float const& a) {
     // get how many bars we will draw
     int         barsToDraw = m_dwGroupMembers.size();
 
@@ -143,7 +143,7 @@ void CHyprGroupBarDecoration::draw(PHLMONITOR pMonitor, float a) {
         auto* const       GROUPCOLACTIVELOCKED    = (CGradientValueData*)(PGROUPCOLACTIVELOCKED.ptr())->getData();
         auto* const       GROUPCOLINACTIVELOCKED  = (CGradientValueData*)(PGROUPCOLINACTIVELOCKED.ptr())->getData();
 
-        const bool        GROUPLOCKED  = m_pWindow->getGroupHead()->m_sGroupData.locked;
+        const bool        GROUPLOCKED  = m_pWindow->getGroupHead()->m_sGroupData.locked || g_pKeybindManager->m_bGroupsLocked;
         const auto* const PCOLACTIVE   = GROUPLOCKED ? GROUPCOLACTIVELOCKED : GROUPCOLACTIVE;
         const auto* const PCOLINACTIVE = GROUPLOCKED ? GROUPCOLINACTIVELOCKED : GROUPCOLINACTIVE;
 
@@ -405,13 +405,16 @@ bool CHyprGroupBarDecoration::onEndWindowDragOnDeco(const Vector2D& pos, PHLWIND
     static auto PSTACKED                         = CConfigValue<Hyprlang::INT>("group:groupbar:stacked");
     static auto PDRAGINTOGROUP                   = CConfigValue<Hyprlang::INT>("group:drag_into_group");
     static auto PMERGEFLOATEDINTOTILEDONGROUPBAR = CConfigValue<Hyprlang::INT>("group:merge_floated_into_tiled_on_groupbar");
+    static auto PMERGEGROUPSONGROUPBAR           = CConfigValue<Hyprlang::INT>("group:merge_groups_on_groupbar");
+    const bool  FLOATEDINTOTILED                 = !m_pWindow->m_bIsFloating && !pDraggedWindow->m_bDraggingTiled;
 
-    bool        denied = false;
-    if (!m_pWindow->m_bIsFloating && !pDraggedWindow->m_bDraggingTiled && !*PMERGEFLOATEDINTOTILEDONGROUPBAR)
-        denied = true;
+    g_pInputManager->m_bWasDraggingWindow = false;
 
-    if (!pDraggedWindow->canBeGroupedInto(m_pWindow.lock()) || (*PDRAGINTOGROUP != 1 && *PDRAGINTOGROUP != 2) || denied)
+    if (!pDraggedWindow->canBeGroupedInto(m_pWindow.lock()) || (*PDRAGINTOGROUP != 1 && *PDRAGINTOGROUP != 2) || (FLOATEDINTOTILED && !*PMERGEFLOATEDINTOTILEDONGROUPBAR) ||
+        (!*PMERGEGROUPSONGROUPBAR && pDraggedWindow->m_sGroupData.pNextWindow.lock() && m_pWindow->m_sGroupData.pNextWindow.lock())) {
+        g_pInputManager->m_bWasDraggingWindow = true;
         return false;
+    }
 
     const float BARRELATIVE = *PSTACKED ? pos.y - assignedBoxGlobal().y - (m_fBarHeight + BAR_PADDING_OUTER_VERT) / 2 : pos.x - assignedBoxGlobal().x - m_fBarWidth / 2;
     const float BARSIZE     = *PSTACKED ? m_fBarHeight + BAR_PADDING_OUTER_VERT : m_fBarWidth + BAR_HORIZONTAL_PADDING;
@@ -442,9 +445,9 @@ bool CHyprGroupBarDecoration::onEndWindowDragOnDeco(const Vector2D& pos, PHLWIND
 
         // restores the group
         for (auto it = members.begin(); it != members.end(); ++it) {
-            (*it)->m_bIsFloating = pWindowInsertAfter->m_bIsFloating; // match the floating state of group members
-            if (pWindowInsertAfter->m_bIsFloating)
-                (*it)->m_vRealSize = pWindowInsertAfter->m_vRealSize.goal(); // match the size of group members
+            (*it)->m_bIsFloating   = pWindowInsertAfter->m_bIsFloating;          // match the floating state of group members
+            (*it)->m_vRealSize     = pWindowInsertAfter->m_vRealSize.goal();     // match the size of group members
+            (*it)->m_vRealPosition = pWindowInsertAfter->m_vRealPosition.goal(); // match the position of group members
             if (std::next(it) != members.end())
                 (*it)->m_sGroupData.pNextWindow = *std::next(it);
             else

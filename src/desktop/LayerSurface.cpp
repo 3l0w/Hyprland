@@ -26,7 +26,7 @@ PHLLS CLayerSurface::create(SP<CLayerShellResource> resource) {
 
     pLS->layer     = resource->current.layer;
     pLS->popupHead = std::make_unique<CPopup>(pLS);
-    pLS->monitorID = pMonitor->ID;
+    pLS->monitor   = pMonitor;
     pMonitor->m_aLayerSurfaceLayers[resource->current.layer].emplace_back(pLS);
 
     pLS->forceBlur = g_pConfigManager->shouldBlurLS(pLS->szNamespace);
@@ -50,7 +50,7 @@ PHLLS CLayerSurface::create(SP<CLayerShellResource> resource) {
 void CLayerSurface::registerCallbacks() {
     alpha.setUpdateCallback([this](void*) {
         if (dimAround)
-            g_pHyprRenderer->damageMonitor(g_pCompositor->getMonitorFromID(monitorID));
+            g_pHyprRenderer->damageMonitor(monitor.lock());
     });
 }
 
@@ -82,9 +82,9 @@ CLayerSurface::~CLayerSurface() {
 void CLayerSurface::onDestroy() {
     Debug::log(LOG, "LayerSurface {:x} destroyed", (uintptr_t)layerSurface.get());
 
-    const auto PMONITOR = g_pCompositor->getMonitorFromID(monitorID);
+    const auto PMONITOR = monitor.lock();
 
-    if (!g_pCompositor->getMonitorFromID(monitorID))
+    if (!PMONITOR)
         Debug::log(WARN, "Layersurface destroyed on an invalid monitor (removed?)");
 
     if (!fadingOut) {
@@ -137,7 +137,7 @@ void CLayerSurface::onMap() {
     g_pCompositor->removeFromFadingOutSafe(self.lock());
 
     // fix if it changed its mon
-    const auto PMONITOR = g_pCompositor->getMonitorFromID(monitorID);
+    const auto PMONITOR = monitor.lock();
 
     if (!PMONITOR)
         return;
@@ -175,8 +175,7 @@ void CLayerSurface::onMap() {
 
     CBox geomFixed = {geometry.x + PMONITOR->vecPosition.x, geometry.y + PMONITOR->vecPosition.y, geometry.width, geometry.height};
     g_pHyprRenderer->damageBox(&geomFixed);
-    const auto WORKSPACE  = PMONITOR->activeWorkspace;
-    const bool FULLSCREEN = WORKSPACE->m_bHasFullscreenWindow && WORKSPACE->m_efFullscreenMode == FSMODE_FULLSCREEN;
+    const bool FULLSCREEN = PMONITOR->activeWorkspace && PMONITOR->activeWorkspace->m_bHasFullscreenWindow && PMONITOR->activeWorkspace->m_efFullscreenMode == FSMODE_FULLSCREEN;
 
     startAnimation(!(layer == ZWLR_LAYER_SHELL_V1_LAYER_TOP && FULLSCREEN && !GRABSFOCUS));
     readyToDelete = false;
@@ -197,7 +196,7 @@ void CLayerSurface::onUnmap() {
 
     std::erase_if(g_pInputManager->m_dExclusiveLSes, [this](const auto& other) { return !other.lock() || other.lock() == self.lock(); });
 
-    if (!g_pCompositor->getMonitorFromID(monitorID) || g_pCompositor->m_bUnsafeState) {
+    if (!monitor || g_pCompositor->m_bUnsafeState) {
         Debug::log(WARN, "Layersurface unmapping on invalid monitor (removed?) ignoring.");
 
         g_pCompositor->addToFadingOutSafe(self.lock());
@@ -221,9 +220,9 @@ void CLayerSurface::onUnmap() {
 
     g_pCompositor->addToFadingOutSafe(self.lock());
 
-    const auto PMONITOR = g_pCompositor->getMonitorFromID(monitorID);
+    const auto PMONITOR = monitor.lock();
 
-    const bool WASLASTFOCUS = g_pCompositor->m_pLastFocus == surface->resource();
+    const bool WASLASTFOCUS = g_pSeatManager->state.keyboardFocus == surface->resource() || g_pSeatManager->state.pointerFocus == surface->resource();
 
     if (!PMONITOR)
         return;
@@ -232,7 +231,7 @@ void CLayerSurface::onUnmap() {
     //                                vvvvvvvvvvvvv if there is a last focus and the last focus is not keyboard focusable, fallback to window
     if (WASLASTFOCUS || (g_pCompositor->m_pLastFocus && g_pCompositor->m_pLastFocus->hlSurface && !g_pCompositor->m_pLastFocus->hlSurface->keyboardFocusable()))
         g_pInputManager->refocusLastWindow(PMONITOR);
-    else if (g_pCompositor->m_pLastFocus)
+    else if (g_pCompositor->m_pLastFocus && g_pCompositor->m_pLastFocus != surface->resource())
         g_pSeatManager->setKeyboardFocus(g_pCompositor->m_pLastFocus.lock());
 
     CBox geomFixed = {geometry.x + PMONITOR->vecPosition.x, geometry.y + PMONITOR->vecPosition.y, geometry.width, geometry.height};
@@ -256,13 +255,13 @@ void CLayerSurface::onCommit() {
         if (layerSurface->surface && !layerSurface->surface->current.texture) {
             fadingOut = false;
             geometry  = {};
-            g_pHyprRenderer->arrangeLayersForMonitor(monitorID);
+            g_pHyprRenderer->arrangeLayersForMonitor(monitorID());
         }
 
         return;
     }
 
-    const auto PMONITOR = g_pCompositor->getMonitorFromID(monitorID);
+    const auto PMONITOR = monitor.lock();
 
     if (!PMONITOR)
         return;
@@ -321,8 +320,18 @@ void CLayerSurface::onCommit() {
             realSize.setValueAndWarp(geometry.size());
     }
 
-    if (mapped) {
-        const bool WASLASTFOCUS = g_pCompositor->m_pLastFocus == surface->resource();
+    if (mapped && (layerSurface->current.committed & CLayerShellResource::eCommittedState::STATE_INTERACTIVITY)) {
+        bool WASLASTFOCUS = false;
+        layerSurface->surface->breadthfirst(
+            [&WASLASTFOCUS](SP<CWLSurfaceResource> surf, const Vector2D& offset, void* data) { WASLASTFOCUS = WASLASTFOCUS || g_pSeatManager->state.keyboardFocus == surf; },
+            nullptr);
+        if (!WASLASTFOCUS && popupHead) {
+            popupHead->breadthfirst(
+                [&WASLASTFOCUS](CPopup* popup, void* data) {
+                    WASLASTFOCUS = WASLASTFOCUS || (popup->m_pWLSurface && g_pSeatManager->state.keyboardFocus == popup->m_pWLSurface->resource());
+                },
+                nullptr);
+        }
         const bool WASEXCLUSIVE = interactivity == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE;
         const bool ISEXCLUSIVE  = layerSurface->current.interactivity == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE;
 
@@ -332,11 +341,13 @@ void CLayerSurface::onCommit() {
             std::erase_if(g_pInputManager->m_dExclusiveLSes, [this](const auto& other) { return !other.lock() || other.lock() == self.lock(); });
 
         // if the surface was focused and interactive but now isn't, refocus
-        if (WASLASTFOCUS && !layerSurface->current.interactivity) {
+        if (WASLASTFOCUS && layerSurface->current.interactivity == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE) {
             // moveMouseUnified won't focus non interactive layers but it won't unfocus them either,
             // so unfocus the surface here.
             g_pCompositor->focusSurface(nullptr);
-            g_pInputManager->refocusLastWindow(g_pCompositor->getMonitorFromID(monitorID));
+            g_pInputManager->refocusLastWindow(monitor.lock());
+        } else if (WASLASTFOCUS && WASEXCLUSIVE && layerSurface->current.interactivity == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND) {
+            g_pInputManager->simulateMouseMovement();
         } else if (!WASEXCLUSIVE && ISEXCLUSIVE) {
             // if now exclusive and not previously
             g_pSeatManager->setGrab(nullptr);
@@ -389,7 +400,7 @@ void CLayerSurface::applyRules() {
         } else if (rule.rule.starts_with("xray")) {
             CVarList vars{rule.rule, 0, ' '};
             try {
-                xray = configStringToInt(vars[1]);
+                xray = configStringToInt(vars[1]).value_or(false);
             } catch (...) {}
         } else if (rule.rule.starts_with("animation")) {
             CVarList vars{rule.rule, 2, 's'};
@@ -544,4 +555,8 @@ int CLayerSurface::popupsCount() {
     int no = -1; // we have one dummy
     popupHead->breadthfirst([](CPopup* p, void* data) { *(int*)data += 1; }, &no);
     return no;
+}
+
+MONITORID CLayerSurface::monitorID() {
+    return monitor ? monitor->ID : MONITOR_INVALID;
 }

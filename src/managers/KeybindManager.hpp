@@ -8,6 +8,7 @@
 #include <functional>
 #include <xkbcommon/xkbcommon.h>
 #include "../devices/IPointer.hpp"
+#include "eventLoop/EventLoopTimer.hpp"
 
 class CInputManager;
 class CConfigManager;
@@ -28,6 +29,7 @@ struct SKeybind {
     std::string            description    = "";
     bool                   release        = false;
     bool                   repeat         = false;
+    bool                   longPress      = false;
     bool                   mouse          = false;
     bool                   nonConsuming   = false;
     bool                   transparent    = false;
@@ -100,11 +102,9 @@ class CKeybindManager {
 
     std::unordered_map<std::string, std::function<SDispatchResult(std::string)>> m_mDispatchers;
 
-    wl_event_source*                                                             m_pActiveKeybindEventSource = nullptr;
-
     bool                                                                         m_bGroupsLocked = false;
 
-    std::list<SKeybind>                                                          m_lKeybinds;
+    std::vector<SP<SKeybind>>                                                    m_vKeybinds;
 
     //since we cant find keycode through keyname in xkb:
     //on sendshortcut call, we once search for keyname (e.g. "g") the correct keycode (e.g. 42)
@@ -119,13 +119,15 @@ class CKeybindManager {
 
     inline static std::string       m_szCurrentSelectedSubmap = "";
 
-    SKeybind*                       m_pActiveKeybind = nullptr;
+    std::vector<WP<SKeybind>>       m_vActiveKeybinds;
+    WP<SKeybind>                    m_pLastLongPressKeybind;
+    SP<CEventLoopTimer>             m_pLongPressTimer, m_pRepeatKeyTimer;
 
     uint32_t                        m_uTimeLastMs    = 0;
     uint32_t                        m_uLastCode      = 0;
     uint32_t                        m_uLastMouseCode = 0;
 
-    std::vector<SKeybind*>          m_vPressedSpecialBinds;
+    std::vector<WP<SKeybind>>       m_vPressedSpecialBinds;
 
     int                             m_iPassPressed = -1; // used for pass
 
@@ -135,7 +137,7 @@ class CKeybindManager {
 
     std::set<xkb_keysym_t>          m_sMkKeys = {};
     std::set<xkb_keysym_t>          m_sMkMods = {};
-    eMultiKeyCase                   mkBindMatches(const SKeybind);
+    eMultiKeyCase                   mkBindMatches(const SP<SKeybind>);
     eMultiKeyCase                   mkKeysymSetMatches(const std::set<xkb_keysym_t>, const std::set<xkb_keysym_t>);
 
     bool                            handleInternalKeybinds(xkb_keysym_t);
@@ -217,6 +219,7 @@ class CKeybindManager {
     static SDispatchResult denyWindowFromGroup(std::string);
     static SDispatchResult global(std::string);
     static SDispatchResult event(std::string);
+    static SDispatchResult setProp(std::string);
     static SDispatchResult releaseInputCapture(std::string);
 
     friend class CCompositor;

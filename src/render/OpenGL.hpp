@@ -206,30 +206,31 @@ class CHyprOpenGLImpl {
     void     setDamage(const CRegion& damage, std::optional<CRegion> finalDamage = {});
 
     uint32_t getPreferredReadFormat(PHLMONITOR pMonitor);
-    std::vector<SDRMFormat>                               getDRMFormats();
-    EGLImageKHR                                           createEGLImage(const Aquamarine::SDMABUFAttrs& attrs);
-    SP<CEGLSync>                                          createEGLSync(int fenceFD);
-    bool                                                  waitForTimelinePoint(SP<CSyncTimeline> timeline, uint64_t point);
+    std::vector<SDRMFormat>                     getDRMFormats();
+    EGLImageKHR                                 createEGLImage(const Aquamarine::SDMABUFAttrs& attrs);
+    SP<CEGLSync>                                createEGLSync(int fenceFD);
+    bool                                        waitForTimelinePoint(SP<CSyncTimeline> timeline, uint64_t point);
 
-    SCurrentRenderData                                    m_RenderData;
+    SCurrentRenderData                          m_RenderData;
 
-    GLint                                                 m_iCurrentOutputFb = 0;
+    GLint                                       m_iCurrentOutputFb = 0;
 
-    int                                                   m_iGBMFD      = -1;
-    gbm_device*                                           m_pGbmDevice  = nullptr;
-    EGLContext                                            m_pEglContext = nullptr;
-    EGLDisplay                                            m_pEglDisplay = nullptr;
-    EGLDeviceEXT                                          m_pEglDevice  = nullptr;
+    int                                         m_iGBMFD       = -1;
+    gbm_device*                                 m_pGbmDevice   = nullptr;
+    EGLContext                                  m_pEglContext  = nullptr;
+    EGLDisplay                                  m_pEglDisplay  = nullptr;
+    EGLDeviceEXT                                m_pEglDevice   = nullptr;
+    uint                                        failedAssetsNo = 0;
 
-    bool                                                  m_bReloadScreenShader = true; // at launch it can be set
+    bool                                        m_bReloadScreenShader = true; // at launch it can be set
 
-    PHLWINDOWREF                                          m_pCurrentWindow; // hack to get the current rendered window
-    PHLLS                                                 m_pCurrentLayer;  // hack to get the current rendered layer
+    PHLWINDOWREF                                m_pCurrentWindow; // hack to get the current rendered window
+    PHLLS                                       m_pCurrentLayer;  // hack to get the current rendered layer
 
-    std::map<PHLWINDOWREF, CFramebuffer>                  m_mWindowFramebuffers;
-    std::map<PHLLSREF, CFramebuffer>                      m_mLayerFramebuffers;
-    std::unordered_map<PHLMONITORREF, SMonitorRenderData> m_mMonitorRenderResources;
-    std::unordered_map<PHLMONITORREF, CFramebuffer>       m_mMonitorBGFBs;
+    std::map<PHLWINDOWREF, CFramebuffer>        m_mWindowFramebuffers;
+    std::map<PHLLSREF, CFramebuffer>            m_mLayerFramebuffers;
+    std::map<PHLMONITORREF, SMonitorRenderData> m_mMonitorRenderResources;
+    std::map<PHLMONITORREF, CFramebuffer>       m_mMonitorBGFBs;
 
     struct {
         PFNGLEGLIMAGETARGETRENDERBUFFERSTORAGEOESPROC glEGLImageTargetRenderbufferStorageOES = nullptr;
@@ -277,7 +278,7 @@ class CHyprOpenGLImpl {
     CShader                 m_sFinalScreenShader;
     CTimer                  m_tGlobalTimer;
 
-    SP<CTexture>            m_pBackgroundTexture, m_pLockDeadTexture, m_pLockDead2Texture, m_pLockTtyTextTexture;
+    SP<CTexture>            m_pMissingAssetTexture, m_pBackgroundTexture, m_pLockDeadTexture, m_pLockDead2Texture, m_pLockTtyTextTexture;
 
     void                    logShaderError(const GLuint&, bool program = false);
     GLuint                  createProgram(const std::string&, const std::string&, bool dynamic = false);
@@ -290,6 +291,7 @@ class CHyprOpenGLImpl {
     SP<CTexture>            loadAsset(const std::string& file);
     SP<CTexture>            renderText(const std::string& text, CColor col, int pt, bool italic = false);
     void                    initAssets();
+    void                    initMissingAssetTexture();
 
     //
     std::optional<std::vector<uint64_t>> getModsForFormat(EGLint format);

@@ -169,7 +169,7 @@ class CConfigManager {
     static std::string                                              getMainConfigPath();
     const std::string                                               getConfigString();
 
-    SMonitorRule                                                    getMonitorRuleFor(const SP<CMonitor>);
+    SMonitorRule                                                    getMonitorRuleFor(const PHLMONITOR);
     SWorkspaceRule                                                  getWorkspaceRuleFor(PHLWORKSPACE workspace);
     std::string                                                     getDefaultWorkspaceFor(const std::string&);
 
@@ -199,6 +199,8 @@ class CConfigManager {
     bool                      replaceMonitorRule(const SMonitorRule&);
     void                      ensureMonitorStatus();
     void                      ensureVRR(PHLMONITOR pMonitor = nullptr);
+
+    bool                      shouldUseSoftwareCursors();
 
     std::string               parseKeyword(const std::string&, const std::string&);
 

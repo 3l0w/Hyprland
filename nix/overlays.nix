@@ -40,7 +40,13 @@ in {
         inherit date;
       };
       hyprland-unwrapped = final.hyprland.override {wrapRuntimeDeps = false;};
-      hyprland-debug = final.hyprland.override {debug = true;};
+
+      # Build major libs with debug to get as much info as possible in a stacktrace
+      hyprland-debug = final.hyprland.override {
+        aquamarine = final.aquamarine.override {debug = true;};
+        hyprutils = final.hyprutils.override {debug = true;};
+        debug = true;
+      };
       hyprland-legacy-renderer = final.hyprland.override {legacyRenderer = true;};
 
       # deprecated packages
@@ -63,7 +69,7 @@ in {
   # Packages for extra software recommended for usage with Hyprland,
   # including forked or patched packages for compatibility.
   hyprland-extras = lib.composeManyExtensions [
-    inputs.xdph.overlays.xdg-desktop-portal-hyprland
+    inputs.xdph.overlays.default
   ];
 
   # udis86 from nixpkgs is too old, and also does not provide a .pc file

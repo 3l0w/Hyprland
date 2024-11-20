@@ -143,6 +143,15 @@ void CInputManager::sendMotionEventsToFocused() {
 }
 
 void CInputManager::mouseMoveUnified(uint32_t time, bool refocus) {
+    if (!g_pCompositor->m_bReadyToProcess || g_pCompositor->m_bIsShuttingDown || g_pCompositor->m_bUnsafeState)
+        return;
+
+    Vector2D const mouseCoords        = getMouseCoordsInternal();
+    auto const     MOUSECOORDSFLOORED = mouseCoords.floor();
+
+    if (MOUSECOORDSFLOORED == m_vLastCursorPosFloored && !refocus)
+        return;
+
     static auto PFOLLOWMOUSE      = CConfigValue<Hyprlang::INT>("input:follow_mouse");
     static auto PMOUSEREFOCUS     = CConfigValue<Hyprlang::INT>("input:mouse_refocus");
     static auto PFOLLOWONDND      = CConfigValue<Hyprlang::INT>("misc:always_follow_on_dnd");
@@ -162,15 +171,6 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus) {
     Vector2D               surfacePos = Vector2D(-1337, -1337);
     PHLWINDOW              pFoundWindow;
     PHLLS                  pFoundLayerSurface;
-
-    if (!g_pCompositor->m_bReadyToProcess || g_pCompositor->m_bIsShuttingDown || g_pCompositor->m_bUnsafeState)
-        return;
-
-    Vector2D   mouseCoords        = getMouseCoordsInternal();
-    const auto MOUSECOORDSFLOORED = mouseCoords.floor();
-
-    if (MOUSECOORDSFLOORED == m_vLastCursorPosFloored && !refocus)
-        return;
 
     EMIT_HOOK_EVENT_CANCELLABLE("mouseMove", MOUSECOORDSFLOORED);
 
@@ -295,7 +295,8 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus) {
         foundSurface = g_pCompositor->vectorToLayerSurface(mouseCoords, &PMONITOR->m_aLayerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_TOP], &surfaceCoords, &pFoundLayerSurface);
 
     // then, we check if the workspace doesnt have a fullscreen window
-    const auto PWORKSPACE = PMONITOR->activeWorkspace;
+    const auto PWORKSPACE   = PMONITOR->activeWorkspace;
+    const auto PWINDOWIDEAL = g_pCompositor->vectorToWindowUnified(mouseCoords, RESERVED_EXTENTS | INPUT_EXTENTS | ALLOW_FLOATING);
     if (PWORKSPACE->m_bHasFullscreenWindow && !foundSurface && PWORKSPACE->m_efFullscreenMode == FSMODE_FULLSCREEN) {
         pFoundWindow = g_pCompositor->getFullscreenWindowOnWorkspace(PWORKSPACE->m_iID);
 
@@ -304,8 +305,6 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus) {
             PWORKSPACE->m_bHasFullscreenWindow = false;
             return;
         }
-
-        const auto PWINDOWIDEAL = g_pCompositor->vectorToWindowUnified(mouseCoords, RESERVED_EXTENTS | INPUT_EXTENTS | ALLOW_FLOATING);
 
         if (PWINDOWIDEAL &&
             ((PWINDOWIDEAL->m_bIsFloating && PWINDOWIDEAL->m_bCreatedOverFullscreen) /* floating over fullscreen */
@@ -326,7 +325,8 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus) {
         if (PWORKSPACE->m_bHasFullscreenWindow && PWORKSPACE->m_efFullscreenMode == FSMODE_MAXIMIZED) {
             if (!foundSurface) {
                 if (PMONITOR->activeSpecialWorkspace) {
-                    pFoundWindow = g_pCompositor->vectorToWindowUnified(mouseCoords, RESERVED_EXTENTS | INPUT_EXTENTS | ALLOW_FLOATING);
+                    if (pFoundWindow != PWINDOWIDEAL)
+                        pFoundWindow = g_pCompositor->vectorToWindowUnified(mouseCoords, RESERVED_EXTENTS | INPUT_EXTENTS | ALLOW_FLOATING);
 
                     if (pFoundWindow && !pFoundWindow->onSpecialWorkspace()) {
                         pFoundWindow = g_pCompositor->getFullscreenWindowOnWorkspace(PWORKSPACE->m_iID);
@@ -339,7 +339,8 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus) {
                     }
 
                     if (!foundSurface) {
-                        pFoundWindow = g_pCompositor->vectorToWindowUnified(mouseCoords, RESERVED_EXTENTS | INPUT_EXTENTS | ALLOW_FLOATING);
+                        if (pFoundWindow != PWINDOWIDEAL)
+                            pFoundWindow = g_pCompositor->vectorToWindowUnified(mouseCoords, RESERVED_EXTENTS | INPUT_EXTENTS | ALLOW_FLOATING);
 
                         if (!(pFoundWindow && pFoundWindow->m_bIsFloating && pFoundWindow->m_bCreatedOverFullscreen))
                             pFoundWindow = g_pCompositor->getFullscreenWindowOnWorkspace(PWORKSPACE->m_iID);
@@ -348,7 +349,8 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus) {
             }
 
         } else {
-            pFoundWindow = g_pCompositor->vectorToWindowUnified(mouseCoords, RESERVED_EXTENTS | INPUT_EXTENTS | ALLOW_FLOATING);
+            if (pFoundWindow != PWINDOWIDEAL)
+                pFoundWindow = g_pCompositor->vectorToWindowUnified(mouseCoords, RESERVED_EXTENTS | INPUT_EXTENTS | ALLOW_FLOATING);
         }
 
         if (pFoundWindow) {
@@ -766,6 +768,7 @@ void CInputManager::onMouseWheel(IPointer::SAxisEvent e) {
     static auto PINPUTSCROLLFACTOR    = CConfigValue<Hyprlang::FLOAT>("input:scroll_factor");
     static auto PTOUCHPADSCROLLFACTOR = CConfigValue<Hyprlang::FLOAT>("input:touchpad:scroll_factor");
     static auto PEMULATEDISCRETE      = CConfigValue<Hyprlang::INT>("input:emulate_discrete_scroll");
+    static auto PFOLLOWMOUSE          = CConfigValue<Hyprlang::INT>("input:follow_mouse");
 
     auto        factor = (*PTOUCHPADSCROLLFACTOR <= 0.f || e.source == WL_POINTER_AXIS_SOURCE_FINGER ? *PTOUCHPADSCROLLFACTOR : *PINPUTSCROLLFACTOR);
 
@@ -787,24 +790,33 @@ void CInputManager::onMouseWheel(IPointer::SAxisEvent e) {
         const auto MOUSECOORDS = g_pInputManager->getMouseCoordsInternal();
         const auto PWINDOW     = g_pCompositor->vectorToWindowUnified(MOUSECOORDS, RESERVED_EXTENTS | INPUT_EXTENTS | ALLOW_FLOATING);
 
-        if (PWINDOW && PWINDOW->checkInputOnDecos(INPUT_TYPE_AXIS, MOUSECOORDS, e))
-            return;
+        if (PWINDOW) {
+            if (PWINDOW->checkInputOnDecos(INPUT_TYPE_AXIS, MOUSECOORDS, e))
+                return;
 
-        if (PWINDOW && *POFFWINDOWAXIS != 1) {
-            const auto BOX = PWINDOW->getWindowMainSurfaceBox();
+            if (*POFFWINDOWAXIS != 1) {
+                const auto BOX = PWINDOW->getWindowMainSurfaceBox();
 
-            if (!BOX.containsPoint(MOUSECOORDS) && !PWINDOW->hasPopupAt(MOUSECOORDS)) {
-                if (*POFFWINDOWAXIS == 0)
-                    return;
+                if (!BOX.containsPoint(MOUSECOORDS) && !PWINDOW->hasPopupAt(MOUSECOORDS)) {
+                    if (*POFFWINDOWAXIS == 0)
+                        return;
 
-                const auto TEMPCURX = std::clamp(MOUSECOORDS.x, BOX.x, BOX.x + BOX.w - 1);
-                const auto TEMPCURY = std::clamp(MOUSECOORDS.y, BOX.y, BOX.y + BOX.h - 1);
+                    const auto TEMPCURX = std::clamp(MOUSECOORDS.x, BOX.x, BOX.x + BOX.w - 1);
+                    const auto TEMPCURY = std::clamp(MOUSECOORDS.y, BOX.y, BOX.y + BOX.h - 1);
 
-                if (*POFFWINDOWAXIS == 3)
-                    g_pCompositor->warpCursorTo({TEMPCURX, TEMPCURY}, true);
+                    if (*POFFWINDOWAXIS == 3)
+                        g_pCompositor->warpCursorTo({TEMPCURX, TEMPCURY}, true);
 
-                g_pSeatManager->sendPointerMotion(e.timeMs, Vector2D{TEMPCURX, TEMPCURY} - BOX.pos());
-                g_pSeatManager->sendPointerFrame();
+                    g_pSeatManager->sendPointerMotion(e.timeMs, Vector2D{TEMPCURX, TEMPCURY} - BOX.pos());
+                    g_pSeatManager->sendPointerFrame();
+                }
+            }
+
+            if (g_pSeatManager->state.pointerFocus) {
+                const auto PCURRWINDOW = g_pCompositor->getWindowFromSurface(g_pSeatManager->state.pointerFocus.lock());
+
+                if (*PFOLLOWMOUSE == 1 && PCURRWINDOW && PWINDOW != PCURRWINDOW)
+                    simulateMouseMovement();
             }
         }
     }
@@ -936,7 +948,7 @@ void CInputManager::setupKeyboard(SP<IKeyboard> keeb) {
         keeb.get());
 
     keeb->keyboardEvents.keymap.registerStaticListener(
-        [this](void* owner, std::any data) {
+        [](void* owner, std::any data) {
             auto       PKEEB  = ((IKeyboard*)owner)->self.lock();
             const auto LAYOUT = PKEEB->getActiveLayout();
 
@@ -1409,13 +1421,19 @@ void CInputManager::refocusLastWindow(PHLMONITOR pMonitor) {
         foundSurface = m_dExclusiveLSes[m_dExclusiveLSes.size() - 1]->surface->resource();
 
     // then any surfaces above windows on the same monitor
-    if (!foundSurface)
+    if (!foundSurface) {
         foundSurface = g_pCompositor->vectorToLayerSurface(g_pInputManager->getMouseCoordsInternal(), &pMonitor->m_aLayerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY],
                                                            &surfaceCoords, &pFoundLayerSurface);
+        if (pFoundLayerSurface && pFoundLayerSurface->interactivity == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND)
+            foundSurface = nullptr;
+    }
 
-    if (!foundSurface)
+    if (!foundSurface) {
         foundSurface = g_pCompositor->vectorToLayerSurface(g_pInputManager->getMouseCoordsInternal(), &pMonitor->m_aLayerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_TOP],
                                                            &surfaceCoords, &pFoundLayerSurface);
+        if (pFoundLayerSurface && pFoundLayerSurface->interactivity == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND)
+            foundSurface = nullptr;
+    }
 
     if (!foundSurface && g_pCompositor->m_pLastWindow.lock() && g_pCompositor->isWorkspaceVisibleNotCovered(g_pCompositor->m_pLastWindow->m_pWorkspace)) {
         // then the last focused window if we're on the same workspace as it
@@ -1451,19 +1469,10 @@ void CInputManager::unconstrainMouse() {
 }
 
 bool CInputManager::isConstrained() {
-    for (auto const& c : m_vConstraints) {
-        const auto C = c.lock();
-
-        if (!C)
-            continue;
-
-        if (!C->isActive() || C->owner()->resource() != g_pCompositor->m_pLastFocus)
-            continue;
-
-        return true;
-    }
-
-    return false;
+    return std::any_of(m_vConstraints.begin(), m_vConstraints.end(), [](auto const& c) {
+        const auto constraint = c.lock();
+        return constraint && constraint->isActive() && constraint->owner()->resource() == g_pCompositor->m_pLastFocus;
+    });
 }
 
 bool CInputManager::isLocked() {
@@ -1619,6 +1628,9 @@ void CInputManager::setTabletConfigs() {
             const auto REGION_SIZE = g_pConfigManager->getDeviceVec(NAME, "region_size", "input:tablet:region_size");
             t->boundBox            = {REGION_POS, REGION_SIZE};
 
+            const auto ABSOLUTE_REGION_POS = g_pConfigManager->getDeviceInt(NAME, "absolute_region_position", "input:tablet:absolute_region_position");
+            t->absolutePos                 = ABSOLUTE_REGION_POS;
+
             const auto ACTIVE_AREA_SIZE = g_pConfigManager->getDeviceVec(NAME, "active_area_size", "input:tablet:active_area_size");
             const auto ACTIVE_AREA_POS  = g_pConfigManager->getDeviceVec(NAME, "active_area_position", "input:tablet:active_area_position");
             if (ACTIVE_AREA_SIZE.x != 0 || ACTIVE_AREA_SIZE.y != 0) {
@@ -1685,31 +1697,12 @@ std::string CInputManager::getNameForNewDevice(std::string internalName) {
     auto proposedNewName = deviceNameToInternalString(internalName);
     int  dupeno          = 0;
 
-    while (std::find_if(m_vKeyboards.begin(), m_vKeyboards.end(),
-                        [&](const auto& other) { return other->hlName == proposedNewName + (dupeno == 0 ? "" : ("-" + std::to_string(dupeno))); }) != m_vKeyboards.end())
+    auto makeNewName = [&]() { return (proposedNewName.empty() ? "unknown-device" : proposedNewName) + (dupeno == 0 ? "" : ("-" + std::to_string(dupeno))); };
+
+    while (std::find_if(m_vHIDs.begin(), m_vHIDs.end(), [&](const auto& other) { return other->hlName == makeNewName(); }) != m_vHIDs.end())
         dupeno++;
 
-    while (std::find_if(m_vPointers.begin(), m_vPointers.end(),
-                        [&](const auto& other) { return other->hlName == proposedNewName + (dupeno == 0 ? "" : ("-" + std::to_string(dupeno))); }) != m_vPointers.end())
-        dupeno++;
-
-    while (std::find_if(m_vTouches.begin(), m_vTouches.end(),
-                        [&](const auto& other) { return other->hlName == proposedNewName + (dupeno == 0 ? "" : ("-" + std::to_string(dupeno))); }) != m_vTouches.end())
-        dupeno++;
-
-    while (std::find_if(m_vTabletPads.begin(), m_vTabletPads.end(),
-                        [&](const auto& other) { return other->hlName == proposedNewName + (dupeno == 0 ? "" : ("-" + std::to_string(dupeno))); }) != m_vTabletPads.end())
-        dupeno++;
-
-    while (std::find_if(m_vTablets.begin(), m_vTablets.end(),
-                        [&](const auto& other) { return other->hlName == proposedNewName + (dupeno == 0 ? "" : ("-" + std::to_string(dupeno))); }) != m_vTablets.end())
-        dupeno++;
-
-    while (std::find_if(m_vTabletTools.begin(), m_vTabletTools.end(),
-                        [&](const auto& other) { return other->hlName == proposedNewName + (dupeno == 0 ? "" : ("-" + std::to_string(dupeno))); }) != m_vTabletTools.end())
-        dupeno++;
-
-    return proposedNewName + (dupeno == 0 ? "" : ("-" + std::to_string(dupeno)));
+    return makeNewName();
 }
 
 void CInputManager::releaseAllMouseButtons() {

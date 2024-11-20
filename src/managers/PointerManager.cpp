@@ -53,7 +53,7 @@ void CPointerManager::unlockSoftwareAll() {
 }
 
 void CPointerManager::lockSoftwareForMonitor(PHLMONITOR mon) {
-    auto state = stateFor(mon);
+    auto const state = stateFor(mon);
     state->softwareLocks++;
 
     if (state->softwareLocks == 1)
@@ -61,7 +61,7 @@ void CPointerManager::lockSoftwareForMonitor(PHLMONITOR mon) {
 }
 
 void CPointerManager::unlockSoftwareForMonitor(PHLMONITOR mon) {
-    auto state = stateFor(mon);
+    auto const state = stateFor(mon);
     state->softwareLocks--;
     if (state->softwareLocks < 0)
         state->softwareLocks = 0;
@@ -70,8 +70,8 @@ void CPointerManager::unlockSoftwareForMonitor(PHLMONITOR mon) {
         updateCursorBackend();
 }
 
-bool CPointerManager::softwareLockedFor(SP<CMonitor> mon) {
-    auto state = stateFor(mon);
+bool CPointerManager::softwareLockedFor(PHLMONITOR mon) {
+    auto const state = stateFor(mon);
     return state->softwareLocks > 0 || state->hardwareFailed;
 }
 
@@ -83,7 +83,7 @@ bool CPointerManager::hasCursor() {
     return currentCursorImage.pBuffer || currentCursorImage.surface;
 }
 
-SP<CPointerManager::SMonitorPointerState> CPointerManager::stateFor(SP<CMonitor> mon) {
+SP<CPointerManager::SMonitorPointerState> CPointerManager::stateFor(PHLMONITOR mon) {
     auto it = std::find_if(monitorStates.begin(), monitorStates.end(), [mon](const auto& other) { return other->monitor == mon; });
     if (it == monitorStates.end())
         return monitorStates.emplace_back(makeShared<CPointerManager::SMonitorPointerState>(mon));
@@ -248,19 +248,16 @@ void CPointerManager::resetCursorImage(bool apply) {
 }
 
 void CPointerManager::updateCursorBackend() {
-    static auto PNOHW = CConfigValue<Hyprlang::INT>("cursor:no_hardware_cursors");
-
-    const auto  CURSORBOX = getCursorBoxGlobal();
+    const auto CURSORBOX = getCursorBoxGlobal();
 
     for (auto const& m : g_pCompositor->m_vMonitors) {
-        auto state = stateFor(m);
-
         if (!m->m_bEnabled || !m->dpmsStatus) {
             Debug::log(TRACE, "Not updating hw cursors: disabled / dpms off display");
             continue;
         }
 
         auto CROSSES = !m->logicalBox().intersection(CURSORBOX).empty();
+        auto state   = stateFor(m);
 
         if (!CROSSES) {
             if (state->cursorFrontBuffer)
@@ -269,7 +266,7 @@ void CPointerManager::updateCursorBackend() {
             continue;
         }
 
-        if (state->softwareLocks > 0 || *PNOHW || !attemptHardwareCursor(state)) {
+        if (state->softwareLocks > 0 || g_pConfigManager->shouldUseSoftwareCursors() || !attemptHardwareCursor(state)) {
             Debug::log(TRACE, "Output {} rejected hardware cursors, falling back to sw", m->szName);
             state->box            = getCursorBoxLogicalForMonitor(state->monitor.lock());
             state->hardwareFailed = true;
@@ -376,10 +373,10 @@ bool CPointerManager::setHWCursorBuffer(SP<SMonitorPointerState> state, SP<Aquam
 }
 
 SP<Aquamarine::IBuffer> CPointerManager::renderHWCursorBuffer(SP<CPointerManager::SMonitorPointerState> state, SP<CTexture> texture) {
-    auto output = state->monitor->output;
+    auto        maxSize    = state->monitor->output->cursorPlaneSize();
+    auto const& cursorSize = currentCursorImage.size;
 
-    auto maxSize    = output->cursorPlaneSize();
-    auto cursorSize = currentCursorImage.size;
+    static auto PDUMB = CConfigValue<Hyprlang::INT>("cursor:use_cpu_buffer");
 
     if (maxSize == Vector2D{})
         return nullptr;
@@ -392,10 +389,23 @@ SP<Aquamarine::IBuffer> CPointerManager::renderHWCursorBuffer(SP<CPointerManager
     } else
         maxSize = cursorSize;
 
-    if (!state->monitor->cursorSwapchain || maxSize != state->monitor->cursorSwapchain->currentOptions().size) {
+    if (!state->monitor->cursorSwapchain || maxSize != state->monitor->cursorSwapchain->currentOptions().size ||
+        *PDUMB != (state->monitor->cursorSwapchain->getAllocator()->type() != Aquamarine::AQ_ALLOCATOR_TYPE_GBM)) {
 
-        if (!state->monitor->cursorSwapchain)
-            state->monitor->cursorSwapchain = Aquamarine::CSwapchain::create(state->monitor->output->getBackend()->preferredAllocator(), state->monitor->output->getBackend());
+        if (!state->monitor->cursorSwapchain || *PDUMB != (state->monitor->cursorSwapchain->getAllocator()->type() != Aquamarine::AQ_ALLOCATOR_TYPE_GBM)) {
+
+            auto allocator = state->monitor->output->getBackend()->preferredAllocator();
+            if (*PDUMB) {
+                for (const auto& a : state->monitor->output->getBackend()->getAllocators()) {
+                    if (a->type() == Aquamarine::AQ_ALLOCATOR_TYPE_DRM_DUMB) {
+                        allocator = a;
+                        break;
+                    }
+                }
+            }
+
+            state->monitor->cursorSwapchain = Aquamarine::CSwapchain::create(allocator, state->monitor->output->getBackend());
+        }
 
         auto options     = state->monitor->cursorSwapchain->currentOptions();
         options.size     = maxSize;
@@ -403,8 +413,10 @@ SP<Aquamarine::IBuffer> CPointerManager::renderHWCursorBuffer(SP<CPointerManager
         options.scanout  = true;
         options.cursor   = true;
         options.multigpu = state->monitor->output->getBackend()->preferredAllocator()->drmFD() != g_pCompositor->m_iDRMFD;
-        // We do not set the format. If it's unset (DRM_FORMAT_INVALID) then the swapchain will pick for us,
+        // We do not set the format (unless shm). If it's unset (DRM_FORMAT_INVALID) then the swapchain will pick for us,
         // but if it's set, we don't wanna change it.
+        if (*PDUMB)
+            options.format = DRM_FORMAT_ARGB8888;
 
         if (!state->monitor->cursorSwapchain->reconfigure(options)) {
             Debug::log(TRACE, "Failed to reconfigure cursor swapchain");
@@ -426,7 +438,61 @@ SP<Aquamarine::IBuffer> CPointerManager::renderHWCursorBuffer(SP<CPointerManager
         return nullptr;
     }
 
-    CRegion damage = {0, 0, INT16_MAX, INT16_MAX};
+    if (*PDUMB) {
+        // get the texture data if available.
+        auto texData = texture->dataCopy();
+        if (texData.empty()) {
+            if (currentCursorImage.surface && currentCursorImage.surface->resource()->role->role() == SURFACE_ROLE_CURSOR) {
+                const auto SURFACE   = currentCursorImage.surface->resource();
+                auto&      shmBuffer = CCursorSurfaceRole::cursorPixelData(SURFACE);
+
+                bool       flipRB = false;
+
+                if (SURFACE->current.texture) {
+                    Debug::log(TRACE, "Cursor CPU surface: format {}, expecting AR24", FormatUtils::drmFormatName(SURFACE->current.texture->m_iDrmFormat));
+                    if (SURFACE->current.texture->m_iDrmFormat == DRM_FORMAT_ABGR8888) {
+                        Debug::log(TRACE, "Cursor CPU surface format AB24, will flip. WARNING: this will break on big endian!");
+                        flipRB = true;
+                    } else if (SURFACE->current.texture->m_iDrmFormat != DRM_FORMAT_ARGB8888) {
+                        Debug::log(TRACE, "Cursor CPU surface format rejected, falling back to sw");
+                        return nullptr;
+                    }
+                }
+
+                if (shmBuffer.data())
+                    texData = shmBuffer;
+                else {
+                    texData.resize(texture->m_vSize.x * 4 * texture->m_vSize.y);
+                    memset(texData.data(), 0x00, texData.size());
+                }
+
+                if (flipRB) {
+                    for (size_t i = 0; i < shmBuffer.size(); i += 4) {
+                        std::swap(shmBuffer.at(i), shmBuffer.at(i + 2)); // little-endian!!!!!!
+                    }
+                }
+            } else {
+                Debug::log(TRACE, "Cannot use dumb copy on dmabuf cursor buffers");
+                return nullptr;
+            }
+        }
+
+        // then, we just yeet it into the dumb buffer
+
+        auto [data, fmt, size] = buf->beginDataPtr(0);
+
+        memset(data, 0, size);
+        if (buf->dmabuf().size.x > texture->m_vSize.x) {
+            size_t STRIDE = 4 * texture->m_vSize.x;
+            for (int i = 0; i < texture->m_vSize.y; i++)
+                memcpy(data + i * buf->dmabuf().strides[0], texData.data() + i * STRIDE, STRIDE);
+        } else
+            memcpy(data, texData.data(), std::min(size, texData.size()));
+
+        buf->endDataPtr();
+
+        return buf;
+    }
 
     g_pHyprRenderer->makeEGLCurrent();
     g_pHyprOpenGL->m_RenderData.pMonitor = state->monitor;
@@ -434,59 +500,12 @@ SP<Aquamarine::IBuffer> CPointerManager::renderHWCursorBuffer(SP<CPointerManager
     auto RBO = g_pHyprRenderer->getOrCreateRenderbuffer(buf, state->monitor->cursorSwapchain->currentOptions().format);
     if (!RBO) {
         Debug::log(TRACE, "Failed to create cursor RB with format {}, mod {}", buf->dmabuf().format, buf->dmabuf().modifier);
-        static auto PDUMB = CConfigValue<Hyprlang::INT>("cursor:allow_dumb_copy");
-        if (!*PDUMB)
-            return nullptr;
-
-        auto bufData = buf->beginDataPtr(0);
-        auto bufPtr  = std::get<0>(bufData);
-
-        // clear buffer
-        memset(bufPtr, 0, std::get<2>(bufData));
-
-        if (currentCursorImage.pBuffer) {
-            auto texAttrs = currentCursorImage.pBuffer->shm();
-
-            if (!texAttrs.success) {
-                Debug::log(TRACE, "Cannot use dumb copy on dmabuf cursor buffers");
-                return nullptr;
-            }
-
-            auto texData = currentCursorImage.pBuffer->beginDataPtr(GBM_BO_TRANSFER_WRITE);
-            auto texPtr  = std::get<0>(texData);
-            Debug::log(TRACE, "cursor texture {}x{} {} {} {}", texAttrs.size.x, texAttrs.size.y, (void*)texPtr, texAttrs.format, texAttrs.stride);
-            // copy cursor texture
-            for (int i = 0; i < texAttrs.size.y; i++)
-                memcpy(bufPtr + i * buf->dmabuf().strides[0], texPtr + i * texAttrs.stride, texAttrs.stride);
-        } else if (currentCursorImage.surface && currentCursorImage.surface->resource()->role->role() == SURFACE_ROLE_CURSOR) {
-            const auto SURFACE   = currentCursorImage.surface->resource();
-            auto&      shmBuffer = CCursorSurfaceRole::cursorPixelData(SURFACE);
-            Debug::log(TRACE, "cursor texture pixel data length: {}B", shmBuffer.size());
-
-            if (shmBuffer.data()) {
-                // copy cursor texture
-                // assume format is 32bpp
-                size_t STRIDE = 4 * SURFACE->current.bufferSize.x;
-                for (int i = 0; i < SURFACE->current.bufferSize.y; i++)
-                    memcpy(bufPtr + i * buf->dmabuf().strides[0], shmBuffer.data() + i * STRIDE, STRIDE);
-            } else {
-                // if there is no data, hide the cursor
-                memset(bufPtr, '\0', buf->size.x * buf->size.y * 4 /* assume 32bpp */);
-            }
-
-        } else {
-            Debug::log(TRACE, "Unsupported cursor buffer/surface, falling back to sw (can't dumb copy)");
-            return nullptr;
-        }
-
-        buf->endDataPtr();
-
-        return buf;
+        return nullptr;
     }
 
     RBO->bind();
 
-    g_pHyprOpenGL->beginSimple(state->monitor.lock(), damage, RBO);
+    g_pHyprOpenGL->beginSimple(state->monitor.lock(), {0, 0, INT16_MAX, INT16_MAX}, RBO);
     g_pHyprOpenGL->clear(CColor{0.F, 0.F, 0.F, 0.F});
 
     CBox xbox = {{}, Vector2D{currentCursorImage.size / currentCursorImage.scale * state->monitor->scale}.round()};
@@ -504,7 +523,7 @@ SP<Aquamarine::IBuffer> CPointerManager::renderHWCursorBuffer(SP<CPointerManager
     return buf;
 }
 
-void CPointerManager::renderSoftwareCursorsFor(SP<CMonitor> pMonitor, timespec* now, CRegion& damage, std::optional<Vector2D> overridePos) {
+void CPointerManager::renderSoftwareCursorsFor(PHLMONITOR pMonitor, timespec* now, CRegion& damage, std::optional<Vector2D> overridePos) {
     if (!hasCursor())
         return;
 
@@ -539,7 +558,7 @@ void CPointerManager::renderSoftwareCursorsFor(SP<CMonitor> pMonitor, timespec* 
         currentCursorImage.surface->resource()->frame(now);
 }
 
-Vector2D CPointerManager::getCursorPosForMonitor(SP<CMonitor> pMonitor) {
+Vector2D CPointerManager::getCursorPosForMonitor(PHLMONITOR pMonitor) {
     return CBox{pointerPos - pMonitor->vecPosition, {0, 0}}
                .transform(wlTransformToHyprutils(invertTransform(pMonitor->transform)), pMonitor->vecTransformedSize.x / pMonitor->scale,
                           pMonitor->vecTransformedSize.y / pMonitor->scale)
@@ -547,7 +566,7 @@ Vector2D CPointerManager::getCursorPosForMonitor(SP<CMonitor> pMonitor) {
         pMonitor->scale;
 }
 
-Vector2D CPointerManager::transformedHotspot(SP<CMonitor> pMonitor) {
+Vector2D CPointerManager::transformedHotspot(PHLMONITOR pMonitor) {
     if (!pMonitor->cursorSwapchain)
         return {}; // doesn't matter, we have no hw cursor, and this is only for hw cursors
 
@@ -557,7 +576,7 @@ Vector2D CPointerManager::transformedHotspot(SP<CMonitor> pMonitor) {
         .pos();
 }
 
-CBox CPointerManager::getCursorBoxLogicalForMonitor(SP<CMonitor> pMonitor) {
+CBox CPointerManager::getCursorBoxLogicalForMonitor(PHLMONITOR pMonitor) {
     return getCursorBoxGlobal().translate(-pMonitor->vecPosition);
 }
 
@@ -642,15 +661,13 @@ Vector2D CPointerManager::closestValid(const Vector2D& pos) {
 }
 
 void CPointerManager::damageIfSoftware() {
-    auto        b = getCursorBoxGlobal().expand(4);
-
-    static auto PNOHW = CConfigValue<Hyprlang::INT>("cursor:no_hardware_cursors");
+    auto b = getCursorBoxGlobal().expand(4);
 
     for (auto const& mw : monitorStates) {
         if (mw->monitor.expired() || !mw->monitor->output)
             continue;
 
-        if ((mw->softwareLocks > 0 || mw->hardwareFailed || *PNOHW) && b.overlaps({mw->monitor->vecPosition, mw->monitor->vecSize})) {
+        if ((mw->softwareLocks > 0 || mw->hardwareFailed || g_pConfigManager->shouldUseSoftwareCursors()) && b.overlaps({mw->monitor->vecPosition, mw->monitor->vecSize})) {
             g_pHyprRenderer->damageBox(&b, mw->monitor->shouldSkipScheduleFrameOnMouseEvent());
             break;
         }
@@ -683,9 +700,7 @@ void CPointerManager::move(const Vector2D& deltaLogical) {
 }
 
 void CPointerManager::warpAbsolute(Vector2D abs, SP<IHID> dev) {
-
-    SP<CMonitor> currentMonitor = g_pCompositor->m_pLastMonitor.lock();
-    if (!currentMonitor || !dev)
+    if (!dev)
         return;
 
     if (!std::isnan(abs.x))
@@ -693,20 +708,44 @@ void CPointerManager::warpAbsolute(Vector2D abs, SP<IHID> dev) {
     if (!std::isnan(abs.y))
         abs.y = std::clamp(abs.y, 0.0, 1.0);
 
-    // in logical global
-    CBox mappedArea = currentMonitor->logicalBox();
+    // find x and y size of the entire space
+    const auto& MONITORS = g_pCompositor->m_vMonitors;
+    Vector2D    topLeft = MONITORS.at(0)->vecPosition, bottomRight = MONITORS.at(0)->vecPosition + MONITORS.at(0)->vecSize;
+    for (size_t i = 1; i < MONITORS.size(); ++i) {
+        const auto EXTENT = MONITORS[i]->logicalBox().extent();
+        const auto POS    = MONITORS[i]->logicalBox().pos();
+        if (EXTENT.x > bottomRight.x)
+            bottomRight.x = EXTENT.x;
+        if (EXTENT.y > bottomRight.y)
+            bottomRight.y = EXTENT.y;
+        if (POS.x < topLeft.x)
+            topLeft.x = POS.x;
+        if (POS.y < topLeft.y)
+            topLeft.y = POS.y;
+    }
+    CBox mappedArea = {topLeft, bottomRight - topLeft};
+
+    auto outputMappedArea = [&mappedArea](const std::string& output) {
+        if (output == "current") {
+            if (const auto PLASTMONITOR = g_pCompositor->m_pLastMonitor.lock(); PLASTMONITOR)
+                return PLASTMONITOR->logicalBox();
+        } else if (const auto PMONITOR = g_pCompositor->getMonitorFromString(output); PMONITOR)
+            return PMONITOR->logicalBox();
+        return mappedArea;
+    };
 
     switch (dev->getType()) {
         case HID_TYPE_TABLET: {
             CTablet* TAB = reinterpret_cast<CTablet*>(dev.get());
             if (!TAB->boundOutput.empty()) {
-                if (const auto PMONITOR = g_pCompositor->getMonitorFromString(TAB->boundOutput); PMONITOR) {
-                    currentMonitor = PMONITOR->self.lock();
-                    mappedArea     = currentMonitor->logicalBox();
-                }
-            }
+                mappedArea = outputMappedArea(TAB->boundOutput);
+                mappedArea.translate(TAB->boundBox.pos());
+            } else if (TAB->absolutePos) {
+                mappedArea.x = TAB->boundBox.x;
+                mappedArea.y = TAB->boundBox.y;
+            } else
+                mappedArea.translate(TAB->boundBox.pos());
 
-            mappedArea.translate(TAB->boundBox.pos());
             if (!TAB->boundBox.empty()) {
                 mappedArea.w = TAB->boundBox.w;
                 mappedArea.h = TAB->boundBox.h;
@@ -715,38 +754,14 @@ void CPointerManager::warpAbsolute(Vector2D abs, SP<IHID> dev) {
         }
         case HID_TYPE_TOUCH: {
             ITouch* TOUCH = reinterpret_cast<ITouch*>(dev.get());
-            if (!TOUCH->boundOutput.empty()) {
-                if (const auto PMONITOR = g_pCompositor->getMonitorFromString(TOUCH->boundOutput); PMONITOR) {
-                    currentMonitor = PMONITOR->self.lock();
-                    mappedArea     = currentMonitor->logicalBox();
-                }
-            }
+            if (!TOUCH->boundOutput.empty())
+                mappedArea = outputMappedArea(TOUCH->boundOutput);
             break;
         }
         case HID_TYPE_POINTER: {
             IPointer* POINTER = reinterpret_cast<IPointer*>(dev.get());
-            if (!POINTER->boundOutput.empty()) {
-                if (POINTER->boundOutput == "entire") {
-                    // find x and y size of the entire space
-                    Vector2D bottomRight = {-9999999, -9999999}, topLeft = {9999999, 9999999};
-                    for (auto const& m : g_pCompositor->m_vMonitors) {
-                        const auto EXTENT = m->logicalBox().extent();
-                        const auto POS    = m->logicalBox().pos();
-                        if (EXTENT.x > bottomRight.x)
-                            bottomRight.x = EXTENT.x;
-                        if (EXTENT.y > bottomRight.y)
-                            bottomRight.y = EXTENT.y;
-                        if (POS.x < topLeft.x)
-                            topLeft.x = POS.x;
-                        if (POS.y < topLeft.y)
-                            topLeft.y = POS.y;
-                    }
-                    mappedArea = {topLeft, bottomRight - topLeft};
-                } else if (const auto PMONITOR = g_pCompositor->getMonitorFromString(POINTER->boundOutput); PMONITOR) {
-                    currentMonitor = PMONITOR->self.lock();
-                    mappedArea     = currentMonitor->logicalBox();
-                }
-            }
+            if (!POINTER->boundOutput.empty())
+                mappedArea = outputMappedArea(POINTER->boundOutput);
             break;
         }
         default: break;
@@ -790,7 +805,7 @@ SP<CTexture> CPointerManager::getCurrentCursorTexture() {
 
     if (currentCursorImage.pBuffer) {
         if (!currentCursorImage.bufferTex)
-            currentCursorImage.bufferTex = makeShared<CTexture>(currentCursorImage.pBuffer);
+            currentCursorImage.bufferTex = makeShared<CTexture>(currentCursorImage.pBuffer, true);
         return currentCursorImage.bufferTex;
     }
 
@@ -1054,7 +1069,7 @@ void CPointerManager::detachTablet(SP<CTablet> tablet) {
     std::erase_if(tabletListeners, [tablet](const auto& e) { return e->tablet.expired() || e->tablet == tablet; });
 }
 
-void CPointerManager::damageCursor(SP<CMonitor> pMonitor) {
+void CPointerManager::damageCursor(PHLMONITOR pMonitor) {
     for (auto const& mw : monitorStates) {
         if (mw->monitor != pMonitor)
             continue;

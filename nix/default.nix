@@ -56,6 +56,7 @@
 
   adapters = flatten [
     stdenvAdapters.useMoldLinker
+    (lib.optional debug stdenvAdapters.keepDebugInfo)
   ];
 
   customStdenv = foldl' (acc: adapter: adapter acc) stdenv adapters;
@@ -147,14 +148,11 @@ in
         then "debugoptimized"
         else "release";
 
-      # we want as much debug info as possible
-      dontStrip = debug;
-
       mesonFlags = flatten [
         (mapAttrsToList mesonEnable {
           "xwayland" = enableXWayland;
           "legacy_renderer" = legacyRenderer;
-          "systemd" = withSystemd;
+          "uwsm" = false;
         })
         (mapAttrsToList mesonBool {
           "b_pch" = false;

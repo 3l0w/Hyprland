@@ -182,7 +182,7 @@ wl_client* CWLSurfaceResource::client() {
     return pClient;
 }
 
-void CWLSurfaceResource::enter(SP<CMonitor> monitor) {
+void CWLSurfaceResource::enter(PHLMONITOR monitor) {
     if (std::find(enteredOutputs.begin(), enteredOutputs.end(), monitor) != enteredOutputs.end())
         return;
 
@@ -209,7 +209,7 @@ void CWLSurfaceResource::enter(SP<CMonitor> monitor) {
     resource->sendEnter(output->getResource().get());
 }
 
-void CWLSurfaceResource::leave(SP<CMonitor> monitor) {
+void CWLSurfaceResource::leave(PHLMONITOR monitor) {
     if (std::find(enteredOutputs.begin(), enteredOutputs.end(), monitor) == enteredOutputs.end())
         return;
 
@@ -252,9 +252,10 @@ void CWLSurfaceResource::resetRole() {
     role = makeShared<CDefaultSurfaceRole>();
 }
 
-void CWLSurfaceResource::bfHelper(std::vector<SP<CWLSurfaceResource>> nodes, std::function<void(SP<CWLSurfaceResource>, const Vector2D&, void*)> fn, void* data) {
+void CWLSurfaceResource::bfHelper(std::vector<SP<CWLSurfaceResource>> const& nodes, std::function<void(SP<CWLSurfaceResource>, const Vector2D&, void*)> fn, void* data) {
 
     std::vector<SP<CWLSurfaceResource>> nodes2;
+    nodes2.reserve(nodes.size() * 2);
 
     // first, gather all nodes below
     for (auto const& n : nodes) {
@@ -422,10 +423,8 @@ void CWLSurfaceResource::unlockPendingState() {
 }
 
 void CWLSurfaceResource::commitPendingState() {
-    auto    previousBuffer       = current.buffer;
-    CRegion previousBufferDamage = accumulateCurrentBufferDamage();
-
-    current = pending;
+    auto const previousBuffer = current.buffer;
+    current                   = pending;
     pending.damage.clear();
     pending.bufferDamage.clear();
     pending.newBuffer = false;
@@ -439,12 +438,13 @@ void CWLSurfaceResource::commitPendingState() {
         current.texture->m_eTransform = wlTransformToHyprutils(current.transform);
 
     if (current.buffer && current.buffer->buffer) {
-        current.buffer->buffer->update(accumulateCurrentBufferDamage());
+        const auto DAMAGE = accumulateCurrentBufferDamage();
+        current.buffer->buffer->update(DAMAGE);
 
         // if the surface is a cursor, update the shm buffer
         // TODO: don't update the entire texture
-        if (role->role() == SURFACE_ROLE_CURSOR)
-            updateCursorShm();
+        if (role->role() == SURFACE_ROLE_CURSOR && !DAMAGE.empty())
+            updateCursorShm(DAMAGE);
 
         // release the buffer if it's synchronous as update() has done everything thats needed
         // so we can let the app know we're done.
@@ -487,13 +487,12 @@ void CWLSurfaceResource::commitPendingState() {
     lastBuffer = current.buffer ? current.buffer->buffer : WP<IHLBuffer>{};
 }
 
-void CWLSurfaceResource::updateCursorShm() {
+void CWLSurfaceResource::updateCursorShm(CRegion damage) {
     auto buf = current.buffer ? current.buffer->buffer : lastBuffer;
 
     if (!buf)
         return;
 
-    // TODO: actually use damage
     auto& shmData  = CCursorSurfaceRole::cursorPixelData(self.lock());
     auto  shmAttrs = buf->shm();
 
@@ -502,14 +501,28 @@ void CWLSurfaceResource::updateCursorShm() {
         return;
     }
 
+    damage.intersect(CBox{0, 0, buf->size.x, buf->size.y});
+
     // no need to end, shm.
     auto [pixelData, fmt, bufLen] = buf->beginDataPtr(0);
 
     shmData.resize(bufLen);
-    memcpy(shmData.data(), pixelData, bufLen);
+
+    if (const auto RECTS = damage.getRects(); RECTS.size() == 1 && RECTS.at(0).x2 == buf->size.x && RECTS.at(0).y2 == buf->size.y)
+        memcpy(shmData.data(), pixelData, bufLen);
+    else {
+        for (auto& box : damage.getRects()) {
+            for (auto y = box.y1; y < box.y2; ++y) {
+                // bpp is 32 INSALLAH
+                auto begin = 4 * box.y1 * (box.x2 - box.x1) + box.x1;
+                auto len   = 4 * (box.x2 - box.x1);
+                memcpy((uint8_t*)shmData.data() + begin, (uint8_t*)pixelData + begin, len);
+            }
+        }
+    }
 }
 
-void CWLSurfaceResource::presentFeedback(timespec* when, SP<CMonitor> pMonitor) {
+void CWLSurfaceResource::presentFeedback(timespec* when, PHLMONITOR pMonitor) {
     frame(when);
     auto FEEDBACK = makeShared<CQueuedPresentationData>(self.lock());
     FEEDBACK->attachMonitor(pMonitor);

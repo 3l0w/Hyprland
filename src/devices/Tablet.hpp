@@ -92,10 +92,10 @@ class CTablet : public IHID {
     WP<CTablet> self;
 
     bool        relativeInput = false;
-    std::string hlName        = "";
+    bool        absolutePos   = false;
     std::string boundOutput   = "";
     CBox        activeArea;
-    CBox        boundBox; // output-local
+    CBox        boundBox;
 
   private:
     CTablet(SP<Aquamarine::ITablet> tablet);
@@ -154,8 +154,6 @@ class CTabletPad : public IHID {
     WP<CTabletPad>  self;
     WP<CTabletTool> parent;
 
-    std::string     hlName;
-
   private:
     CTabletPad(SP<Aquamarine::ITabletPad> pad);
 
@@ -209,8 +207,6 @@ class CTabletTool : public IHID {
     bool                        isDown = false;
     std::vector<uint32_t>       buttonsDown;
     Vector2D                    absolutePos; // last known absolute position.
-
-    std::string                 hlName;
 
   private:
     CTabletTool(SP<Aquamarine::ITabletTool> tool);

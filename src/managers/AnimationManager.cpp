@@ -64,7 +64,7 @@ void CAnimationManager::tick() {
     if (!*PANIMENABLED)
         animGlobalDisabled = true;
 
-    static auto* const                  PSHADOWSENABLED = (Hyprlang::INT* const*)g_pConfigManager->getConfigValuePtr("decoration:drop_shadow");
+    static auto* const                  PSHADOWSENABLED = (Hyprlang::INT* const*)g_pConfigManager->getConfigValuePtr("decoration:shadow:enabled");
 
     const auto                          DEFAULTBEZIER = m_mBezierCurves.find("default");
 
@@ -99,12 +99,12 @@ void CAnimationManager::tick() {
                 PDECO->damageEntire();
             }
 
-            PMONITOR = g_pCompositor->getMonitorFromID(PWINDOW->m_iMonitorID);
+            PMONITOR = PWINDOW->m_pMonitor.lock();
             if (!PMONITOR)
                 continue;
             animationsDisabled = PWINDOW->m_sWindowData.noAnim.valueOr(animationsDisabled);
         } else if (PWORKSPACE) {
-            PMONITOR = g_pCompositor->getMonitorFromID(PWORKSPACE->m_iMonitorID);
+            PMONITOR = PWORKSPACE->m_pMonitor.lock();
             if (!PMONITOR)
                 continue;
 
@@ -325,7 +325,7 @@ void CAnimationManager::animationSlide(PHLWINDOW pWindow, std::string force, boo
     const auto GOALPOS  = pWindow->m_vRealPosition.goal();
     const auto GOALSIZE = pWindow->m_vRealSize.goal();
 
-    const auto PMONITOR = g_pCompositor->getMonitorFromID(pWindow->m_iMonitorID);
+    const auto PMONITOR = pWindow->m_pMonitor.lock();
 
     if (!PMONITOR)
         return; // unsafe state most likely

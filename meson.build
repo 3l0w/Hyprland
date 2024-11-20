@@ -31,7 +31,7 @@ if cpp_compiler.check_header('execinfo.h')
   add_project_arguments('-DHAS_EXECINFO', language: 'cpp')
 endif
 
-aquamarine = dependency('aquamarine', version: '>=0.4.2')
+aquamarine = dependency('aquamarine', version: '>=0.4.5')
 add_project_arguments(['-DAQUAMARINE_VERSION="@0@"'.format(aquamarine.version())], language: 'cpp')
 
 xcb_dep = dependency('xcb', required: get_option('xwayland'))
@@ -52,8 +52,14 @@ backtrace_dep = cpp_compiler.find_library('execinfo', required: false)
 epoll_dep = dependency('epoll-shim', required: false) # timerfd on BSDs
 
 # Handle options
-if get_option('systemd').enabled()
+systemd_option = get_option('systemd')
+systemd = dependency('systemd', required: systemd_option)
+systemd_option.enable_auto_if(systemd.found())
+
+if (systemd_option.enabled())
+  message('Enabling systemd integration')
   add_project_arguments('-DUSES_SYSTEMD', language: 'cpp')
+  subdir('systemd')
 endif
 
 if get_option('legacy_renderer').enabled()
@@ -79,6 +85,8 @@ tracy = dependency('tracy', static: true, required: get_option('tracy_enable'))
 if get_option('tracy_enable') and get_option('buildtype') != 'debugoptimized'
   warning('Profiling builds should set -- buildtype = debugoptimized')
 endif
+
+
 
 subdir('protocols')
 subdir('src')
