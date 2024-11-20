@@ -747,8 +747,8 @@ SDispatchResult CKeybindManager::handleKeybinds(const uint32_t modmask, const SP
 
             // We only process the releaseinputcapture dispatcher when input capture is active
             if (PROTO::inputCapture->isCaptured()) {
-                if (k.handler == "releaseinputcapture")
-                    res = DISPATCHER->second(k.arg);
+                if (k->handler == "releaseinputcapture")
+                    res = DISPATCHER->second(k->arg);
                 else
                     break;
             }
