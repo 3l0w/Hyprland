@@ -7,6 +7,9 @@
 #include "../protocols/InputCapture.hpp"
 #include "../Compositor.hpp"
 #include "../devices/IKeyboard.hpp"
+#include "../desktop/LayerSurface.hpp"
+#include "../managers/input/InputManager.hpp"
+#include "../managers/HookSystemManager.hpp"
 #include "wlr-layer-shell-unstable-v1.hpp"
 #include <algorithm>
 #include <ranges>
