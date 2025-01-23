@@ -230,4 +230,4 @@ class CKeybindManager {
     friend class CPointerManager;
 };
 
-inline std::unique_ptr<CKeybindManager> g_pKeybindManager;
+inline UP<CKeybindManager> g_pKeybindManager;
