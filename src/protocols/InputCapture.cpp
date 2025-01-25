@@ -89,19 +89,6 @@ void CInputCaptureProtocol::sendKey(uint32_t keyCode, hyprlandInputCaptureManage
         manager->sendKey(keyCode, state);
 }
 
-void CInputCaptureProtocol::forceRelease() {
-    Debug::log(LOG, "[input-capture] Force Input released");
-    active = false;
-
-    for (const auto& manager : m_vManagers)
-        manager->sendForceRelease();
-}
-
-void CInputCaptureProtocol::sendKey(uint32_t keyCode, hyprlandInputCaptureManagerV1KeyState state) {
-    for (const auto& manager : m_vManagers)
-        manager->sendKey(keyCode, state);
-}
-
 void CInputCaptureProtocol::sendModifiers(uint32_t mods_depressed, uint32_t mods_latched, uint32_t mods_locked, uint32_t group) {
     for (const auto& manager : m_vManagers)
         manager->sendModifiers(mods_depressed, mods_locked, mods_locked, group);
