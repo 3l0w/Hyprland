@@ -2,12 +2,15 @@
 #include <pango/pangocairo.h>
 #include "Shaders.hpp"
 #include "OpenGL.hpp"
+#include "Renderer.hpp"
 #include "../Compositor.hpp"
 #include "../helpers/MiscFunctions.hpp"
 #include "../config/ConfigValue.hpp"
 #include "../desktop/LayerSurface.hpp"
 #include "../protocols/LayerShell.hpp"
 #include "../protocols/core/Compositor.hpp"
+#include "../managers/HookSystemManager.hpp"
+#include "../managers/input/InputManager.hpp"
 #include "pass/TexPassElement.hpp"
 #include "pass/RectPassElement.hpp"
 #include "pass/PreBlurElement.hpp"
@@ -397,7 +400,10 @@ std::optional<std::vector<uint64_t>> CHyprOpenGLImpl::getModsForFormat(EGLint fo
     m_sProc.eglQueryDmaBufModifiersEXT(m_pEglDisplay, format, len, mods.data(), external.data(), &len);
 
     std::vector<uint64_t> result;
-    bool                  linearIsExternal = false;
+    // reserve number of elements to avoid reallocations
+    result.reserve(mods.size());
+
+    bool linearIsExternal = false;
     for (size_t i = 0; i < mods.size(); ++i) {
         if (external.at(i)) {
             if (mods.at(i) == DRM_FORMAT_MOD_LINEAR)
@@ -446,6 +452,8 @@ void CHyprOpenGLImpl::initDRMFormats() {
     Debug::log(LOG, "Supported DMA-BUF formats:");
 
     std::vector<SDRMFormat> dmaFormats;
+    // reserve number of elements to avoid reallocations
+    dmaFormats.reserve(formats.size());
 
     for (auto const& fmt : formats) {
         std::vector<uint64_t> mods;
@@ -469,8 +477,10 @@ void CHyprOpenGLImpl::initDRMFormats() {
         });
 
         std::vector<std::pair<uint64_t, std::string>> modifierData;
+        // reserve number of elements to avoid reallocations
+        modifierData.reserve(mods.size());
 
-        auto                                          fmtName = drmGetFormatName(fmt);
+        auto fmtName = drmGetFormatName(fmt);
         Debug::log(LOG, "EGL: GPU Supports Format {} (0x{:x})", fmtName ? fmtName : "?unknown?", fmt);
         for (auto const& mod : mods) {
             auto modName = drmGetFormatModifierName(mod);
@@ -1537,18 +1547,23 @@ void CHyprOpenGLImpl::renderTextureInternalWithDamage(SP<CTexture> tex, CBox* pB
 
     glVertexAttribPointer(shader->posAttrib, 2, GL_FLOAT, GL_FALSE, 0, fullVerts);
 
-    if (allowCustomUV && m_RenderData.primarySurfaceUVTopLeft != Vector2D(-1, -1)) {
+    if (allowCustomUV && m_RenderData.primarySurfaceUVTopLeft != Vector2D(-1, -1))
         glVertexAttribPointer(shader->texAttrib, 2, GL_FLOAT, GL_FALSE, 0, verts);
-    } else {
+    else
         glVertexAttribPointer(shader->texAttrib, 2, GL_FLOAT, GL_FALSE, 0, fullVerts);
-    }
 
     glEnableVertexAttribArray(shader->posAttrib);
     glEnableVertexAttribArray(shader->texAttrib);
 
-    if (m_RenderData.clipBox.width != 0 && m_RenderData.clipBox.height != 0) {
-        CRegion damageClip{m_RenderData.clipBox.x, m_RenderData.clipBox.y, m_RenderData.clipBox.width, m_RenderData.clipBox.height};
-        damageClip.intersect(damage);
+    if (!m_RenderData.clipBox.empty() || !m_RenderData.clipRegion.empty()) {
+        CRegion damageClip = m_RenderData.clipBox;
+
+        if (!m_RenderData.clipRegion.empty()) {
+            if (m_RenderData.clipBox.empty())
+                damageClip = m_RenderData.clipRegion;
+            else
+                damageClip.intersect(m_RenderData.clipRegion);
+        }
 
         if (!damageClip.empty()) {
             for (auto const& RECT : damageClip.getRects()) {
@@ -2069,6 +2084,11 @@ void CHyprOpenGLImpl::renderTextureWithBlur(SP<CTexture> tex, CBox* pBox, float 
     CRegion texDamage{m_RenderData.damage};
     texDamage.intersect(pBox->x, pBox->y, pBox->width, pBox->height);
 
+    // While renderTextureInternalWithDamage will clip the blur as well,
+    // clipping texDamage here allows blur generation to be optimized.
+    if (!m_RenderData.clipRegion.empty())
+        texDamage.intersect(m_RenderData.clipRegion);
+
     if (texDamage.empty())
         return;
 
@@ -2135,14 +2155,24 @@ void CHyprOpenGLImpl::renderTextureWithBlur(SP<CTexture> tex, CBox* pBox, float 
     // stencil done. Render everything.
     CBox MONITORBOX = {0, 0, m_RenderData.pMonitor->vecTransformedSize.x, m_RenderData.pMonitor->vecTransformedSize.y};
     // render our great blurred FB
+    // calculate the uv for it
+    const auto LASTTL = m_RenderData.primarySurfaceUVTopLeft;
+    const auto LASTBR = m_RenderData.primarySurfaceUVBottomRight;
+
+    m_RenderData.primarySurfaceUVTopLeft     = pBox->pos() / MONITORBOX.size();
+    m_RenderData.primarySurfaceUVBottomRight = (pBox->pos() + pBox->size()) / MONITORBOX.size();
+
     static auto PBLURIGNOREOPACITY = CConfigValue<Hyprlang::INT>("decoration:blur:ignore_opacity");
     setMonitorTransformEnabled(true);
     if (!USENEWOPTIMIZE)
         setRenderModifEnabled(false);
-    renderTextureInternalWithDamage(POUTFB->getTexture(), &MONITORBOX, (*PBLURIGNOREOPACITY ? blurA : a * blurA) * overallA, texDamage, 0, 2.0f, false, false, false);
+    renderTextureInternalWithDamage(POUTFB->getTexture(), pBox, (*PBLURIGNOREOPACITY ? blurA : a * blurA) * overallA, texDamage, round, roundingPower, false, false, true);
     if (!USENEWOPTIMIZE)
         setRenderModifEnabled(true);
     setMonitorTransformEnabled(false);
+
+    m_RenderData.primarySurfaceUVTopLeft     = LASTTL;
+    m_RenderData.primarySurfaceUVBottomRight = LASTBR;
 
     // render the window, but clear stencil
     glClearStencil(0);
@@ -2699,10 +2729,6 @@ void CHyprOpenGLImpl::initMissingAssetTexture() {
 void CHyprOpenGLImpl::initAssets() {
     initMissingAssetTexture();
 
-    static auto PFORCEWALLPAPER = CConfigValue<Hyprlang::INT>("misc:force_default_wallpaper");
-
-    const auto  FORCEWALLPAPER = std::clamp(*PFORCEWALLPAPER, static_cast<int64_t>(-1L), static_cast<int64_t>(2L));
-
     m_pLockDeadTexture  = loadAsset("lockdead.png");
     m_pLockDead2Texture = loadAsset("lockdead2.png");
 
@@ -2712,9 +2738,20 @@ void CHyprOpenGLImpl::initAssets() {
                                                        "unknown"),
                                        CHyprColor{0.9F, 0.9F, 0.9F, 0.7F}, 20, true);
 
-    // create the default background texture
-    {
-        std::string texPath = std::format("{}", "wall");
+    ensureBackgroundTexturePresence();
+}
+
+void CHyprOpenGLImpl::ensureBackgroundTexturePresence() {
+    static auto PNOWALLPAPER    = CConfigValue<Hyprlang::INT>("misc:disable_hyprland_logo");
+    static auto PFORCEWALLPAPER = CConfigValue<Hyprlang::INT>("misc:force_default_wallpaper");
+
+    const auto  FORCEWALLPAPER = std::clamp(*PFORCEWALLPAPER, static_cast<int64_t>(-1L), static_cast<int64_t>(2L));
+
+    if (*PNOWALLPAPER)
+        m_pBackgroundTexture.reset();
+    else if (!m_pBackgroundTexture) {
+        // create the default background texture
+        std::string texPath = "wall";
 
         // get the adequate tex
         if (FORCEWALLPAPER == -1) {
@@ -2932,7 +2969,8 @@ SP<CEGLSync> CHyprOpenGLImpl::createEGLSync(int fenceFD) {
             Debug::log(ERR, "createEGLSync: dup failed");
             return nullptr;
         }
-
+        // reserve number of elements to avoid reallocations
+        attribs.reserve(3);
         attribs.push_back(EGL_SYNC_NATIVE_FENCE_FD_ANDROID);
         attribs.push_back(dupFd);
         attribs.push_back(EGL_NONE);

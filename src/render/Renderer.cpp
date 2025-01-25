@@ -8,6 +8,10 @@
 #include "../config/ConfigValue.hpp"
 #include "../managers/CursorManager.hpp"
 #include "../managers/PointerManager.hpp"
+#include "../managers/input/InputManager.hpp"
+#include "../managers/HookSystemManager.hpp"
+#include "../managers/AnimationManager.hpp"
+#include "../managers/LayoutManager.hpp"
 #include "../desktop/Window.hpp"
 #include "../desktop/LayerSurface.hpp"
 #include "../protocols/SessionLock.hpp"
@@ -20,6 +24,9 @@
 #include "../protocols/LinuxDMABUF.hpp"
 #include "../protocols/InputCapture.hpp"
 #include "../helpers/sync/SyncTimeline.hpp"
+#include "../hyprerror/HyprError.hpp"
+#include "../debug/HyprDebugOverlay.hpp"
+#include "../debug/HyprNotificationOverlay.hpp"
 #include "pass/TexPassElement.hpp"
 #include "pass/ClearPassElement.hpp"
 #include "pass/RectPassElement.hpp"
@@ -418,8 +425,8 @@ void CHyprRenderer::renderWorkspaceWindows(PHLMONITOR pMonitor, PHLWORKSPACE pWo
     }
 }
 
-void CHyprRenderer::renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, timespec* time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool ignoreAllGeometry) {
-    if (pWindow->isHidden())
+void CHyprRenderer::renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, timespec* time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone) {
+    if (pWindow->isHidden() && !standalone)
         return;
 
     if (pWindow->m_bFadingOut) {
@@ -451,7 +458,7 @@ void CHyprRenderer::renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, timespe
         renderdata.pos.y = pMonitor->vecPosition.y;
     }
 
-    if (ignoreAllGeometry)
+    if (standalone)
         decorate = false;
 
     // whether to use m_fMovingToWorkspaceAlpha, only if fading out into an invisible ws
@@ -464,12 +471,12 @@ void CHyprRenderer::renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, timespe
         (USE_WORKSPACE_FADE_ALPHA ? pWindow->m_fMovingToWorkspaceAlpha->value() : 1.F) * pWindow->m_fMovingFromWorkspaceAlpha->value();
     renderdata.alpha         = pWindow->m_fActiveInactiveAlpha->value();
     renderdata.decorate      = decorate && !pWindow->m_bX11DoesntWantBorders && !pWindow->isEffectiveInternalFSMode(FSMODE_FULLSCREEN);
-    renderdata.rounding      = ignoreAllGeometry || renderdata.dontRound ? 0 : pWindow->rounding() * pMonitor->scale;
-    renderdata.roundingPower = ignoreAllGeometry || renderdata.dontRound ? 2.0f : pWindow->roundingPower();
-    renderdata.blur          = !ignoreAllGeometry && *PBLUR && !DONT_BLUR;
+    renderdata.rounding      = standalone || renderdata.dontRound ? 0 : pWindow->rounding() * pMonitor->scale;
+    renderdata.roundingPower = standalone || renderdata.dontRound ? 2.0f : pWindow->roundingPower();
+    renderdata.blur          = !standalone && *PBLUR && !DONT_BLUR;
     renderdata.pWindow       = pWindow;
 
-    if (ignoreAllGeometry) {
+    if (standalone) {
         renderdata.alpha     = 1.f;
         renderdata.fadeAlpha = 1.f;
     }
@@ -1460,11 +1467,6 @@ bool CHyprRenderer::commitPendingAndDoExplicitSync(PHLMONITOR pMonitor) {
     if (inFD >= 0)
         pMonitor->output->state->setExplicitInFence(inFD);
 
-    static auto PWIDE = CConfigValue<Hyprlang::INT>("experimental:wide_color_gamut");
-    if (pMonitor->output->state->state().wideColorGamut != *PWIDE)
-        Debug::log(TRACE, "Setting wide color gamut {}", *PWIDE ? "on" : "off");
-    pMonitor->output->state->setWideColorGamut(*PWIDE);
-
     static auto PHDR = CConfigValue<Hyprlang::INT>("experimental:hdr");
 
     const bool  SUPPORTSPQ = pMonitor->output->parsedEDID.hdrMetadata.has_value() ? pMonitor->output->parsedEDID.hdrMetadata->supportsPQ : false;
@@ -1473,12 +1475,37 @@ bool CHyprRenderer::commitPendingAndDoExplicitSync(PHLMONITOR pMonitor) {
         if (pMonitor->activeWorkspace && pMonitor->activeWorkspace->m_bHasFullscreenWindow && pMonitor->activeWorkspace->m_efFullscreenMode == FSMODE_FULLSCREEN) {
             const auto WINDOW = pMonitor->activeWorkspace->getFullscreenWindow();
             const auto SURF   = WINDOW->m_pWLSurface->resource();
-            if (SURF->colorManagement.valid() && SURF->colorManagement->hasImageDescription())
-                pMonitor->output->state->setHDRMetadata(createHDRMetadata(SURF->colorManagement.get()->imageDescription(), pMonitor->output->parsedEDID));
-            else
+            if (SURF->colorManagement.valid() && SURF->colorManagement->hasImageDescription()) {
+                bool needsHdrMetadataUpdate = SURF->colorManagement->needsHdrMetadataUpdate() || pMonitor->m_previousFSWindow != WINDOW;
+                if (SURF->colorManagement->needsHdrMetadataUpdate())
+                    SURF->colorManagement->setHDRMetadata(createHDRMetadata(SURF->colorManagement.get()->imageDescription(), pMonitor->output->parsedEDID));
+                if (needsHdrMetadataUpdate)
+                    pMonitor->output->state->setHDRMetadata(SURF->colorManagement->hdrMetadata());
+            } else if ((pMonitor->output->state->state().hdrMetadata.hdmi_metadata_type1.eotf == 2) != *PHDR)
                 pMonitor->output->state->setHDRMetadata(*PHDR ? createHDRMetadata(2, pMonitor->output->parsedEDID) : createHDRMetadata(0, pMonitor->output->parsedEDID));
-        } else
-            pMonitor->output->state->setHDRMetadata(*PHDR ? createHDRMetadata(2, pMonitor->output->parsedEDID) : createHDRMetadata(0, pMonitor->output->parsedEDID));
+            pMonitor->m_previousFSWindow = WINDOW;
+        } else {
+            if ((pMonitor->output->state->state().hdrMetadata.hdmi_metadata_type1.eotf == 2) != *PHDR)
+                pMonitor->output->state->setHDRMetadata(*PHDR ? createHDRMetadata(2, pMonitor->output->parsedEDID) : createHDRMetadata(0, pMonitor->output->parsedEDID));
+            pMonitor->m_previousFSWindow.reset();
+        }
+    }
+
+    static auto PWIDE    = CConfigValue<Hyprlang::INT>("experimental:wide_color_gamut");
+    const bool  needsWCG = *PWIDE || pMonitor->output->state->state().hdrMetadata.hdmi_metadata_type1.eotf == 2;
+    if (pMonitor->output->state->state().wideColorGamut != needsWCG) {
+        Debug::log(TRACE, "Setting wide color gamut {}", needsWCG ? "on" : "off");
+        pMonitor->output->state->setWideColorGamut(needsWCG);
+
+        // FIXME do not trust enabled10bit, auto switch to 10bit and back if needed
+        if (needsWCG && !pMonitor->enabled10bit) {
+            Debug::log(WARN, "Wide color gamut is enabled but the display is not in 10bit mode");
+            static bool shown = false;
+            if (!shown) {
+                g_pHyprNotificationOverlay->addNotification("Wide color gamut is enabled but the display is not in 10bit mode", CHyprColor{}, 15000, ICON_WARNING);
+                shown = true;
+            }
+        }
     }
 
     if (pMonitor->ctmUpdated) {

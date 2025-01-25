@@ -1,9 +1,7 @@
 #pragma once
 
 #include <optional>
-#include <string>
 #include <wayland-server.h>
-#include "math/Math.hpp"
 #include <vector>
 #include <format>
 #include <expected>
@@ -40,7 +38,6 @@ bool                                envEnabled(const std::string& env);
 int                                 allocateSHMFile(size_t len);
 bool                                allocateSHMFilePair(size_t size, int* rw_fd_ptr, int* ro_fd_ptr);
 float                               stringToPercentage(const std::string& VALUE, const float REL);
-bool                                executableExistsInPath(const std::string& exe);
 
 template <typename... Args>
 [[deprecated("use std::format instead")]] std::string getFormat(std::format_string<Args...> fmt, Args&&... args) {

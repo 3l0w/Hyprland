@@ -1,5 +1,7 @@
 #include "DecorationPositioner.hpp"
-#include "../../Compositor.hpp"
+#include "../../desktop/Window.hpp"
+#include "../../managers/HookSystemManager.hpp"
+#include "../../managers/LayoutManager.hpp"
 
 CDecorationPositioner::CDecorationPositioner() {
     static auto P = g_pHookSystem->hookDynamic("closeWindow", [this](void* call, SCallbackInfo& info, std::any data) {
@@ -77,7 +79,7 @@ CDecorationPositioner::SWindowPositioningData* CDecorationPositioner::getDataFor
     if (it != m_vWindowPositioningDatas.end())
         return it->get();
 
-    const auto DATA = m_vWindowPositioningDatas.emplace_back(std::make_unique<CDecorationPositioner::SWindowPositioningData>(pWindow, pDecoration)).get();
+    const auto DATA = m_vWindowPositioningDatas.emplace_back(makeUnique<CDecorationPositioner::SWindowPositioningData>(pWindow, pDecoration)).get();
 
     DATA->positioningInfo = pDecoration->getPositioningInfo();
 
@@ -120,6 +122,9 @@ void CDecorationPositioner::onWindowUpdate(PHLWINDOW pWindow) {
 
     //
     std::vector<CDecorationPositioner::SWindowPositioningData*> datas;
+    // reserve to avoid reallocations
+    datas.reserve(pWindow->m_dWindowDecorations.size());
+
     for (auto const& wd : pWindow->m_dWindowDecorations) {
         datas.push_back(getDataFor(wd.get(), pWindow));
     }

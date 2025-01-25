@@ -2,14 +2,18 @@
 
 #include "Compositor.hpp"
 #include "debug/Log.hpp"
+#include "desktop/DesktopTypes.hpp"
 #include "helpers/Splashes.hpp"
 #include "config/ConfigValue.hpp"
+#include "config/ConfigWatcher.hpp"
 #include "managers/CursorManager.hpp"
 #include "managers/TokenManager.hpp"
 #include "managers/PointerManager.hpp"
 #include "managers/SeatManager.hpp"
 #include "managers/VersionKeeperManager.hpp"
+#include "managers/DonationNagManager.hpp"
 #include "managers/eventLoop/EventLoopManager.hpp"
+#include <algorithm>
 #include <aquamarine/output/Output.hpp>
 #include <bit>
 #include <ctime>
@@ -17,14 +21,16 @@
 #include <print>
 #include <cstring>
 #include <filesystem>
+#include <ranges>
+#include <print>
 #include <unordered_set>
 #include "debug/HyprCtl.hpp"
 #include "debug/CrashReporter.hpp"
 #ifdef USES_SYSTEMD
 #include <helpers/SdDaemon.hpp> // for SdNotify
 #endif
-#include <ranges>
 #include "helpers/varlist/VarList.hpp"
+#include "helpers/fs/FsUtils.hpp"
 #include "protocols/FractionalScale.hpp"
 #include "protocols/PointerConstraints.hpp"
 #include "protocols/LayerShell.hpp"
@@ -39,6 +45,24 @@
 #include "xwayland/XWayland.hpp"
 #include "helpers/ByteOperations.hpp"
 #include "render/decorations/CHyprGroupBarDecoration.hpp"
+
+#include "managers/KeybindManager.hpp"
+#include "managers/SessionLockManager.hpp"
+#include "managers/XWaylandManager.hpp"
+
+#include "config/ConfigManager.hpp"
+#include "render/OpenGL.hpp"
+#include "managers/input/InputManager.hpp"
+#include "managers/AnimationManager.hpp"
+#include "managers/EventManager.hpp"
+#include "managers/HookSystemManager.hpp"
+#include "managers/ProtocolManager.hpp"
+#include "managers/LayoutManager.hpp"
+#include "plugins/PluginSystem.hpp"
+#include "helpers/Watchdog.hpp"
+#include "hyprerror/HyprError.hpp"
+#include "debug/HyprNotificationOverlay.hpp"
+#include "debug/HyprDebugOverlay.hpp"
 
 #include <hyprutils/string/String.hpp>
 #include <aquamarine/input/Input.hpp>
@@ -139,7 +163,10 @@ void CCompositor::restoreNofile() {
         Debug::log(ERR, "Failed restoring NOFILE limits");
 }
 
-CCompositor::CCompositor() : m_iHyprlandPID(getpid()) {
+CCompositor::CCompositor(bool onlyConfig) : m_bOnlyConfigVerification(onlyConfig), m_iHyprlandPID(getpid()) {
+    if (onlyConfig)
+        return;
+
     m_szHyprTempDataRoot = std::string{getenv("XDG_RUNTIME_DIR")} + "/hypr";
 
     if (m_szHyprTempDataRoot.starts_with("/hypr")) {
@@ -203,7 +230,7 @@ CCompositor::CCompositor() : m_iHyprlandPID(getpid()) {
 }
 
 CCompositor::~CCompositor() {
-    if (!m_bIsShuttingDown)
+    if (!m_bIsShuttingDown && !m_bOnlyConfigVerification)
         cleanup();
 }
 
@@ -238,6 +265,16 @@ static bool filterGlobals(const wl_client* client, const wl_global* global, void
 
 //
 void CCompositor::initServer(std::string socketName, int socketFd) {
+
+    if (m_bOnlyConfigVerification) {
+        g_pHookSystem       = makeUnique<CHookSystemManager>();
+        g_pKeybindManager   = makeUnique<CKeybindManager>();
+        g_pAnimationManager = makeUnique<CHyprAnimationManager>();
+        g_pConfigManager    = makeUnique<CConfigManager>();
+
+        std::println("\n\n======== Config parsing result:\n\n{}", g_pConfigManager->verify());
+        return;
+    }
 
     m_sWLDisplay = wl_display_create();
 
@@ -530,7 +567,6 @@ void CCompositor::cleanup() {
     g_pProtocolManager.reset();
     g_pHyprRenderer.reset();
     g_pHyprOpenGL.reset();
-    g_pThreadManager.reset();
     g_pConfigManager.reset();
     g_pLayoutManager.reset();
     g_pHyprError.reset();
@@ -544,6 +580,9 @@ void CCompositor::cleanup() {
     g_pSeatManager.reset();
     g_pHyprCtl.reset();
     g_pEventLoopManager.reset();
+    g_pVersionKeeperMgr.reset();
+    g_pDonationNagManager.reset();
+    g_pConfigWatcher.reset();
 
     if (m_pAqBackend)
         m_pAqBackend.reset();
@@ -561,92 +600,92 @@ void CCompositor::initManagers(eManagersInitStage stage) {
     switch (stage) {
         case STAGE_PRIORITY: {
             Debug::log(LOG, "Creating the EventLoopManager!");
-            g_pEventLoopManager = std::make_unique<CEventLoopManager>(m_sWLDisplay, m_sWLEventLoop);
+            g_pEventLoopManager = makeUnique<CEventLoopManager>(m_sWLDisplay, m_sWLEventLoop);
 
             Debug::log(LOG, "Creating the HookSystem!");
-            g_pHookSystem = std::make_unique<CHookSystemManager>();
+            g_pHookSystem = makeUnique<CHookSystemManager>();
 
             Debug::log(LOG, "Creating the KeybindManager!");
-            g_pKeybindManager = std::make_unique<CKeybindManager>();
+            g_pKeybindManager = makeUnique<CKeybindManager>();
 
             Debug::log(LOG, "Creating the AnimationManager!");
-            g_pAnimationManager = std::make_unique<CHyprAnimationManager>();
+            g_pAnimationManager = makeUnique<CHyprAnimationManager>();
 
             Debug::log(LOG, "Creating the ConfigManager!");
-            g_pConfigManager = std::make_unique<CConfigManager>();
+            g_pConfigManager = makeUnique<CConfigManager>();
 
             Debug::log(LOG, "Creating the CHyprError!");
-            g_pHyprError = std::make_unique<CHyprError>();
+            g_pHyprError = makeUnique<CHyprError>();
 
             Debug::log(LOG, "Creating the LayoutManager!");
-            g_pLayoutManager = std::make_unique<CLayoutManager>();
+            g_pLayoutManager = makeUnique<CLayoutManager>();
 
             Debug::log(LOG, "Creating the TokenManager!");
-            g_pTokenManager = std::make_unique<CTokenManager>();
+            g_pTokenManager = makeUnique<CTokenManager>();
 
             g_pConfigManager->init();
-            g_pWatchdog = std::make_unique<CWatchdog>(); // requires config
+            g_pWatchdog = makeUnique<CWatchdog>(); // requires config
             // wait for watchdog to initialize to not hit data races in reading config values.
             while (!g_pWatchdog->m_bWatchdogInitialized) {
                 std::this_thread::yield();
             }
 
             Debug::log(LOG, "Creating the PointerManager!");
-            g_pPointerManager = std::make_unique<CPointerManager>();
+            g_pPointerManager = makeUnique<CPointerManager>();
 
             Debug::log(LOG, "Creating the EventManager!");
-            g_pEventManager = std::make_unique<CEventManager>();
+            g_pEventManager = makeUnique<CEventManager>();
         } break;
         case STAGE_BASICINIT: {
             Debug::log(LOG, "Creating the CHyprOpenGLImpl!");
-            g_pHyprOpenGL = std::make_unique<CHyprOpenGLImpl>();
+            g_pHyprOpenGL = makeUnique<CHyprOpenGLImpl>();
 
             Debug::log(LOG, "Creating the ProtocolManager!");
-            g_pProtocolManager = std::make_unique<CProtocolManager>();
+            g_pProtocolManager = makeUnique<CProtocolManager>();
 
             Debug::log(LOG, "Creating the SeatManager!");
-            g_pSeatManager = std::make_unique<CSeatManager>();
+            g_pSeatManager = makeUnique<CSeatManager>();
         } break;
         case STAGE_LATE: {
-            Debug::log(LOG, "Creating the ThreadManager!");
-            g_pThreadManager = std::make_unique<CThreadManager>();
-
             Debug::log(LOG, "Creating CHyprCtl");
-            g_pHyprCtl = std::make_unique<CHyprCtl>();
+            g_pHyprCtl = makeUnique<CHyprCtl>();
 
             Debug::log(LOG, "Creating the InputManager!");
-            g_pInputManager = std::make_unique<CInputManager>();
+            g_pInputManager = makeUnique<CInputManager>();
 
             Debug::log(LOG, "Creating the HyprRenderer!");
-            g_pHyprRenderer = std::make_unique<CHyprRenderer>();
+            g_pHyprRenderer = makeUnique<CHyprRenderer>();
 
             Debug::log(LOG, "Creating the XWaylandManager!");
-            g_pXWaylandManager = std::make_unique<CHyprXWaylandManager>();
+            g_pXWaylandManager = makeUnique<CHyprXWaylandManager>();
 
             Debug::log(LOG, "Creating the SessionLockManager!");
-            g_pSessionLockManager = std::make_unique<CSessionLockManager>();
+            g_pSessionLockManager = makeUnique<CSessionLockManager>();
 
             Debug::log(LOG, "Creating the HyprDebugOverlay!");
-            g_pDebugOverlay = std::make_unique<CHyprDebugOverlay>();
+            g_pDebugOverlay = makeUnique<CHyprDebugOverlay>();
 
             Debug::log(LOG, "Creating the HyprNotificationOverlay!");
-            g_pHyprNotificationOverlay = std::make_unique<CHyprNotificationOverlay>();
+            g_pHyprNotificationOverlay = makeUnique<CHyprNotificationOverlay>();
 
             Debug::log(LOG, "Creating the PluginSystem!");
-            g_pPluginSystem = std::make_unique<CPluginSystem>();
+            g_pPluginSystem = makeUnique<CPluginSystem>();
             g_pConfigManager->handlePluginLoads();
 
             Debug::log(LOG, "Creating the DecorationPositioner!");
-            g_pDecorationPositioner = std::make_unique<CDecorationPositioner>();
+            g_pDecorationPositioner = makeUnique<CDecorationPositioner>();
 
             Debug::log(LOG, "Creating the CursorManager!");
-            g_pCursorManager = std::make_unique<CCursorManager>();
+            g_pCursorManager = makeUnique<CCursorManager>();
 
             Debug::log(LOG, "Creating the VersionKeeper!");
-            g_pVersionKeeperMgr = std::make_unique<CVersionKeeperManager>();
+            g_pVersionKeeperMgr = makeUnique<CVersionKeeperManager>();
+
+            Debug::log(LOG, "Creating the DonationNag!");
+            g_pDonationNagManager = makeUnique<CDonationNagManager>();
 
             Debug::log(LOG, "Starting XWayland");
-            g_pXWayland = std::make_unique<CXWayland>(g_pCompositor->m_bEnableXwayland);
+            g_pXWayland = makeUnique<CXWayland>(g_pCompositor->m_bWantsXwayland);
         } break;
         default: UNREACHABLE();
     }
@@ -1130,6 +1169,7 @@ void CCompositor::focusWindow(PHLWINDOW pWindow, SP<CWLSurfaceResource> pSurface
     g_pXWaylandManager->activateWindow(pWindow, true); // sets the m_pLastWindow
 
     pWindow->updateDynamicRules();
+    pWindow->onFocusAnimUpdate();
 
     updateWindowAnimatedDecorationValues(pWindow);
 
@@ -1615,62 +1655,37 @@ PHLWINDOW CCompositor::getWindowInDirection(const CBox& box, PHLWORKSPACE pWorks
     return nullptr;
 }
 
-PHLWINDOW CCompositor::getNextWindowOnWorkspace(PHLWINDOW pWindow, bool focusableOnly, std::optional<bool> floating) {
-    bool gotToWindow = false;
-    for (auto const& w : m_vWindows) {
-        if (w != pWindow && !gotToWindow)
-            continue;
-
-        if (w == pWindow) {
-            gotToWindow = true;
-            continue;
-        }
-
-        if (floating.has_value() && w->m_bIsFloating != floating.value())
-            continue;
-
-        if (w->m_pWorkspace == pWindow->m_pWorkspace && w->m_bIsMapped && !w->isHidden() && (!focusableOnly || !w->m_sWindowData.noFocus.valueOrDefault()))
-            return w;
-    }
-
-    for (auto const& w : m_vWindows) {
-        if (floating.has_value() && w->m_bIsFloating != floating.value())
-            continue;
-
-        if (w != pWindow && w->m_pWorkspace == pWindow->m_pWorkspace && w->m_bIsMapped && !w->isHidden() && (!focusableOnly || !w->m_sWindowData.noFocus.valueOrDefault()))
-            return w;
-    }
-
-    return nullptr;
+PHLWINDOW CCompositor::getNextWindowOnWorkspace(PHLWINDOW pWindow, bool focusableOnly, std::optional<bool> floating, bool visible) {
+    auto       it       = std::ranges::find(m_vWindows, pWindow);
+    const auto FINDER   = [&](const PHLWINDOW& w) { return isWindowAvailableForCycle(pWindow, w, focusableOnly, floating, visible); };
+    const auto IN_RIGHT = std::find_if(it, m_vWindows.end(), FINDER);
+    if (IN_RIGHT != m_vWindows.end())
+        return *IN_RIGHT;
+    const auto IN_LEFT = std::find_if(m_vWindows.begin(), it, FINDER);
+    return *IN_LEFT;
 }
 
-PHLWINDOW CCompositor::getPrevWindowOnWorkspace(PHLWINDOW pWindow, bool focusableOnly, std::optional<bool> floating) {
-    bool gotToWindow = false;
-    for (auto const& w : m_vWindows | std::views::reverse) {
-        if (w != pWindow && !gotToWindow)
-            continue;
+PHLWINDOW CCompositor::getPrevWindowOnWorkspace(PHLWINDOW pWindow, bool focusableOnly, std::optional<bool> floating, bool visible) {
+    auto       it      = std::ranges::find(std::ranges::reverse_view(m_vWindows), pWindow);
+    const auto FINDER  = [&](const PHLWINDOW& w) { return isWindowAvailableForCycle(pWindow, w, focusableOnly, floating, visible); };
+    const auto IN_LEFT = std::find_if(it, m_vWindows.rend(), FINDER);
+    if (IN_LEFT != m_vWindows.rend())
+        return *IN_LEFT;
+    const auto IN_RIGHT = std::find_if(m_vWindows.rbegin(), it, FINDER);
+    return *IN_RIGHT;
+}
 
-        if (w == pWindow) {
-            gotToWindow = true;
-            continue;
-        }
+inline static bool isWorkspaceMatches(PHLWINDOW pWindow, const PHLWINDOW w, bool anyWorkspace) {
+    return anyWorkspace ? w->m_pWorkspace && w->m_pWorkspace->isVisible() : w->m_pWorkspace == pWindow->m_pWorkspace;
+}
 
-        if (floating.has_value() && w->m_bIsFloating != floating.value())
-            continue;
+inline static bool isFloatingMatches(PHLWINDOW w, std::optional<bool> floating) {
+    return !floating.has_value() || w->m_bIsFloating == floating.value();
+};
 
-        if (w->m_pWorkspace == pWindow->m_pWorkspace && w->m_bIsMapped && !w->isHidden() && (!focusableOnly || !w->m_sWindowData.noFocus.valueOrDefault()))
-            return w;
-    }
-
-    for (auto const& w : m_vWindows | std::views::reverse) {
-        if (floating.has_value() && w->m_bIsFloating != floating.value())
-            continue;
-
-        if (w != pWindow && w->m_pWorkspace == pWindow->m_pWorkspace && w->m_bIsMapped && !w->isHidden() && (!focusableOnly || !w->m_sWindowData.noFocus.valueOrDefault()))
-            return w;
-    }
-
-    return nullptr;
+bool CCompositor::isWindowAvailableForCycle(PHLWINDOW pWindow, const PHLWINDOW w, bool focusableOnly, std::optional<bool> floating, bool anyWorkspace) {
+    return isFloatingMatches(w, floating) && w != pWindow && isWorkspaceMatches(pWindow, w, anyWorkspace) && w->m_bIsMapped && !w->isHidden() &&
+        (!focusableOnly || !w->m_sWindowData.noFocus.valueOrDefault());
 }
 
 WORKSPACEID CCompositor::getNextAvailableNamedWorkspace() {
@@ -1705,12 +1720,8 @@ PHLWORKSPACE CCompositor::getWorkspaceByString(const std::string& str) {
 }
 
 bool CCompositor::isPointOnAnyMonitor(const Vector2D& point) {
-    for (auto const& m : m_vMonitors) {
-        if (VECINRECT(point, m->vecPosition.x, m->vecPosition.y, m->vecSize.x + m->vecPosition.x, m->vecSize.y + m->vecPosition.y))
-            return true;
-    }
-
-    return false;
+    return std::ranges::any_of(
+        m_vMonitors, [&](const PHLMONITOR& m) { return VECINRECT(point, m->vecPosition.x, m->vecPosition.y, m->vecSize.x + m->vecPosition.x, m->vecSize.y + m->vecPosition.y); });
 }
 
 bool CCompositor::isPointOnReservedArea(const Vector2D& point, const PHLMONITOR pMonitor) {
@@ -1855,12 +1866,7 @@ void CCompositor::updateWindowAnimatedDecorationValues(PHLWINDOW pWindow) {
         }
     }
 
-    // tick angle if it's not running (aka dead)
-    if (!pWindow->m_fBorderAngleAnimationProgress->isBeingAnimated())
-        pWindow->m_fBorderAngleAnimationProgress->setValueAndWarp(0.f);
-
     // opacity
-    const auto PWORKSPACE = pWindow->m_pWorkspace;
     if (pWindow->isEffectiveInternalFSMode(FSMODE_FULLSCREEN)) {
         *pWindow->m_fActiveInactiveAlpha = pWindow->m_sWindowData.alphaFullscreen.valueOrDefault().applyAlpha(*PFULLSCREENALPHA);
     } else {
@@ -2401,6 +2407,9 @@ PHLWINDOW CCompositor::getWindowByRegex(const std::string& regexp_) {
     } else if (regexp.starts_with("initialtitle:")) {
         mode       = MODE_INITIAL_TITLE_REGEX;
         regexCheck = regexp.substr(13);
+    } else if (regexp.starts_with("tag:")) {
+        mode       = MODE_TAG_REGEX;
+        regexCheck = regexp.substr(4);
     } else if (regexp.starts_with("address:")) {
         mode       = MODE_ADDRESS;
         matchCheck = regexp.substr(8);
@@ -2435,6 +2444,18 @@ PHLWINDOW CCompositor::getWindowByRegex(const std::string& regexp_) {
             case MODE_INITIAL_TITLE_REGEX: {
                 const auto initialWindowTitle = w->m_szInitialTitle;
                 if (!RE2::FullMatch(initialWindowTitle, regexCheck))
+                    continue;
+                break;
+            }
+            case MODE_TAG_REGEX: {
+                bool tagMatched = false;
+                for (auto const& t : w->m_tags.getTags()) {
+                    if (RE2::FullMatch(t, regexCheck)) {
+                        tagMatched = true;
+                        break;
+                    }
+                }
+                if (!tagMatched)
                     continue;
                 break;
             }
@@ -2497,13 +2518,13 @@ PHLLS CCompositor::getLayerSurfaceFromSurface(SP<CWLSurfaceResource> pSurface) {
             continue;
 
         ls->layerSurface->surface->breadthfirst(
-            [](SP<CWLSurfaceResource> surf, const Vector2D& offset, void* data) {
-                if (surf == ((std::pair<SP<CWLSurfaceResource>, bool>*)data)->first) {
-                    *(bool*)data = true;
+            [&result](SP<CWLSurfaceResource> surf, const Vector2D& offset, void* data) {
+                if (surf == result.first) {
+                    result.second = true;
                     return;
                 }
             },
-            &result);
+            nullptr);
 
         if (result.second)
             return ls;
@@ -2630,7 +2651,7 @@ void CCompositor::performUserChecks() {
     }
 
     if (!*PNOCHECKQTUTILS) {
-        if (!executableExistsInPath("hyprland-dialog")) {
+        if (!NFsUtils::executableExistsInPath("hyprland-dialog")) {
             g_pHyprNotificationOverlay->addNotification(
                 "Your system does not have hyprland-qtutils installed. This is a runtime dependency for some dialogs. Consider installing it.", CHyprColor{}, 15000, ICON_WARNING);
         }
@@ -2690,7 +2711,7 @@ void CCompositor::moveWindowToWorkspaceSafe(PHLWINDOW pWindow, PHLWORKSPACE pWor
         g_pLayoutManager->getCurrentLayout()->recalculateWindow(pWindow);
 
         if (!pWindow->getDecorationByType(DECORATION_GROUPBAR))
-            pWindow->addWindowDeco(std::make_unique<CHyprGroupBarDecoration>(pWindow));
+            pWindow->addWindowDeco(makeUnique<CHyprGroupBarDecoration>(pWindow));
 
     } else {
         if (!pWindow->m_bIsFloating)
@@ -2744,11 +2765,9 @@ PHLWINDOW CCompositor::getForceFocus() {
 void CCompositor::arrangeMonitors() {
     static auto* const      PXWLFORCESCALEZERO = (Hyprlang::INT* const*)g_pConfigManager->getConfigValuePtr("xwayland:force_zero_scaling");
 
-    std::vector<PHLMONITOR> toArrange;
+    std::vector<PHLMONITOR> toArrange(m_vMonitors.begin(), m_vMonitors.end());
     std::vector<PHLMONITOR> arranged;
-
-    for (auto const& m : m_vMonitors)
-        toArrange.push_back(m);
+    arranged.reserve(toArrange.size());
 
     Debug::log(LOG, "arrangeMonitors: {} to arrange", toArrange.size());
 

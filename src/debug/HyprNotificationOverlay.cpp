@@ -5,6 +5,10 @@
 #include "../config/ConfigValue.hpp"
 #include "../render/pass/TexPassElement.hpp"
 
+#include "../managers/AnimationManager.hpp"
+#include "../managers/HookSystemManager.hpp"
+#include "../render/Renderer.hpp"
+
 static inline auto iconBackendFromLayout(PangoLayout* layout) {
     // preference: Nerd > FontAwesome > text
     auto eIconBackendChecks = std::array<eIconBackend, 2>{ICONS_BACKEND_NF, ICONS_BACKEND_FA};
@@ -36,7 +40,7 @@ CHyprNotificationOverlay::~CHyprNotificationOverlay() {
 }
 
 void CHyprNotificationOverlay::addNotification(const std::string& text, const CHyprColor& color, const float timeMs, const eIcons icon, const float fontSize) {
-    const auto PNOTIF = m_vNotifications.emplace_back(std::make_unique<SNotification>()).get();
+    const auto PNOTIF = m_vNotifications.emplace_back(makeUnique<SNotification>()).get();
 
     PNOTIF->text  = icon != eIcons::ICON_NONE ? " " + text /* tiny bit of padding otherwise icon touches text */ : text;
     PNOTIF->color = color == CHyprColor(0) ? ICONS_COLORS[icon] : color;

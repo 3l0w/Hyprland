@@ -4,7 +4,6 @@
 #include <string>
 
 #include "../config/ConfigDataValues.hpp"
-#include "../defines.hpp"
 #include "../helpers/AnimatedVariable.hpp"
 #include "../helpers/math/Math.hpp"
 #include "../helpers/signal/Signal.hpp"
@@ -12,6 +11,7 @@
 #include "../macros.hpp"
 #include "../managers/XWaylandManager.hpp"
 #include "../render/decorations/IHyprWindowDecoration.hpp"
+#include "../render/Transformer.hpp"
 #include "DesktopTypes.hpp"
 #include "Popup.hpp"
 #include "Subsurface.hpp"
@@ -57,6 +57,7 @@ enum eSuppressEvents : uint8_t {
     SUPPRESS_MAXIMIZE           = 1 << 1,
     SUPPRESS_ACTIVATE           = 1 << 2,
     SUPPRESS_ACTIVATE_FOCUSONLY = 1 << 3,
+    SUPPRESS_FULLSCREEN_OUTPUT  = 1 << 4,
 };
 
 class IWindowTransformer;
@@ -288,14 +289,15 @@ class CWindow {
     bool m_bNoInitialFocus = false;
 
     // Fullscreen and Maximize
-    bool m_bWantsInitialFullscreen = false;
+    bool      m_bWantsInitialFullscreen        = false;
+    MONITORID m_iWantsInitialFullscreenMonitor = MONITOR_INVALID;
 
     // bitfield eSuppressEvents
     uint64_t m_eSuppressedEvents = SUPPRESS_NONE;
 
     // desktop components
-    std::unique_ptr<CSubsurface> m_pSubsurfaceHead;
-    std::unique_ptr<CPopup>      m_pPopupHead;
+    UP<CSubsurface> m_pSubsurfaceHead;
+    UP<CPopup>      m_pPopupHead;
 
     // Animated border
     CGradientValueData m_cRealBorderColor         = {0};
@@ -326,14 +328,14 @@ class CWindow {
 
     // Window decorations
     // TODO: make this a SP.
-    std::vector<std::unique_ptr<IHyprWindowDecoration>> m_dWindowDecorations;
-    std::vector<IHyprWindowDecoration*>                 m_vDecosToRemove;
+    std::vector<UP<IHyprWindowDecoration>> m_dWindowDecorations;
+    std::vector<IHyprWindowDecoration*>    m_vDecosToRemove;
 
     // Special render data, rules, etc
     SWindowData m_sWindowData;
 
     // Transformers
-    std::vector<std::unique_ptr<IWindowTransformer>> m_vTransformers;
+    std::vector<UP<IWindowTransformer>> m_vTransformers;
 
     // for alpha
     PHLANIMVAR<float> m_fActiveInactiveAlpha;
@@ -394,7 +396,7 @@ class CWindow {
     SBoxExtents            getFullWindowExtents();
     CBox                   getWindowBoxUnified(uint64_t props);
     CBox                   getWindowIdealBoundingBoxIgnoreReserved();
-    void                   addWindowDeco(std::unique_ptr<IHyprWindowDecoration> deco);
+    void                   addWindowDeco(UP<IHyprWindowDecoration> deco);
     void                   updateWindowDecos();
     void                   removeWindowDeco(IHyprWindowDecoration* deco);
     void                   uncacheWindowDecos();
@@ -452,6 +454,7 @@ class CWindow {
     void                   switchWithWindowInGroup(PHLWINDOW pWindow);
     void                   setAnimationsToMove();
     void                   onWorkspaceAnimUpdate();
+    void                   onFocusAnimUpdate();
     void                   onUpdateState();
     void                   onUpdateMeta();
     void                   onX11Configure(CBox box);

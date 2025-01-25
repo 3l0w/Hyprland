@@ -1,11 +1,14 @@
 #pragma once
 
 #include "../defines.hpp"
+#include <stack>
 #include <vector>
+#include "../SharedDefs.hpp"
+#include "MiscFunctions.hpp"
 #include "WLClasses.hpp"
 #include <vector>
 #include <array>
-#include <memory>
+
 #include <xf86drmMode.h>
 #include "Timer.hpp"
 #include "math/Math.hpp"
@@ -189,6 +192,7 @@ class CMonitor {
 
     bool        m_bEnabled             = false;
     bool        m_bRenderingInitPassed = false;
+    WP<CWindow> m_previousFSWindow;
 
     // For the list lookup
 
@@ -196,11 +200,16 @@ class CMonitor {
         return vecPosition == rhs.vecPosition && vecSize == rhs.vecSize && szName == rhs.szName;
     }
 
-  private:
-    void        setupDefaultWS(const SMonitorRule&);
-    WORKSPACEID findAvailableDefaultWS();
+    // workspace previous per monitor functionality
+    SWorkspaceIDName getPrevWorkspaceIDName(const WORKSPACEID id);
+    void             addPrevWorkspaceID(const WORKSPACEID id);
 
-    bool        doneScheduled = false;
+  private:
+    void                    setupDefaultWS(const SMonitorRule&);
+    WORKSPACEID             findAvailableDefaultWS();
+
+    bool                    doneScheduled = false;
+    std::stack<WORKSPACEID> prevWorkSpaces;
 
     struct {
         CHyprSignalListener frame;

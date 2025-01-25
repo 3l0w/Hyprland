@@ -4,7 +4,6 @@
 #include "../defines.hpp"
 #include "WLSurface.hpp"
 #include "../helpers/AnimatedVariable.hpp"
-#include "LayerRule.hpp"
 
 class CLayerShellResource;
 
@@ -60,7 +59,7 @@ class CLayerSurface {
     CBox                       geometry = {0, 0, 0, 0};
     Vector2D                   position;
     std::string                szNamespace = "";
-    std::unique_ptr<CPopup>    popupHead;
+    UP<CPopup>                 popupHead;
 
     void                       onDestroy();
     void                       onMap();

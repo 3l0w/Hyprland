@@ -7,6 +7,11 @@
 #include "../protocols/XDGShell.hpp"
 #include "../protocols/core/Compositor.hpp"
 #include "../xwayland/XSurface.hpp"
+#include "../render/Renderer.hpp"
+#include "../managers/input/InputManager.hpp"
+#include "../managers/LayoutManager.hpp"
+#include "../managers/EventManager.hpp"
+#include "../managers/HookSystemManager.hpp"
 
 void IHyprLayout::onWindowCreated(PHLWINDOW pWindow, eDirection direction) {
     CBox desiredGeometry = {};
@@ -210,7 +215,7 @@ bool IHyprLayout::onWindowCreatedAutoGroup(PHLWINDOW pWindow) {
         recalculateWindow(pWindow);
 
         if (!pWindow->getDecorationByType(DECORATION_GROUPBAR))
-            pWindow->addWindowDeco(std::make_unique<CHyprGroupBarDecoration>(pWindow));
+            pWindow->addWindowDeco(makeUnique<CHyprGroupBarDecoration>(pWindow));
 
         return true;
     }
@@ -369,7 +374,7 @@ void IHyprLayout::onEndDragWindow() {
                 DRAGGINGWINDOW->updateWindowDecos();
 
                 if (!DRAGGINGWINDOW->getDecorationByType(DECORATION_GROUPBAR))
-                    DRAGGINGWINDOW->addWindowDeco(std::make_unique<CHyprGroupBarDecoration>(DRAGGINGWINDOW));
+                    DRAGGINGWINDOW->addWindowDeco(makeUnique<CHyprGroupBarDecoration>(DRAGGINGWINDOW));
             }
         }
     }
@@ -712,6 +717,8 @@ void IHyprLayout::changeWindowFloatingMode(PHLWINDOW pWindow) {
 
     pWindow->m_bPinned = false;
 
+    g_pHyprRenderer->damageWindow(pWindow, true);
+
     const auto TILED = isWindowTiled(pWindow);
 
     // event
@@ -781,8 +788,9 @@ void IHyprLayout::changeWindowFloatingMode(PHLWINDOW pWindow) {
     }
 
     g_pCompositor->updateWindowAnimatedDecorationValues(pWindow);
-
     pWindow->updateToplevel();
+    g_pXWaylandManager->setWindowSize(pWindow, pWindow->m_vRealSize->goal());
+    g_pHyprRenderer->damageWindow(pWindow);
 }
 
 void IHyprLayout::moveActiveWindow(const Vector2D& delta, PHLWINDOW pWindow) {

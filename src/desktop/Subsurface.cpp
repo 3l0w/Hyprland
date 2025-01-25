@@ -4,6 +4,8 @@
 #include "../config/ConfigValue.hpp"
 #include "../protocols/core/Compositor.hpp"
 #include "../protocols/core/Subcompositor.hpp"
+#include "../render/Renderer.hpp"
+#include "../managers/input/InputManager.hpp"
 
 CSubsurface::CSubsurface(PHLWINDOW pOwner) : m_pWindowParent(pOwner) {
     initSignals();
@@ -124,9 +126,9 @@ void CSubsurface::onNewSubsurface(SP<CWLSubsurfaceResource> pSubsurface) {
     CSubsurface* PSUBSURFACE = nullptr;
 
     if (!m_pWindowParent.expired())
-        PSUBSURFACE = m_vChildren.emplace_back(std::make_unique<CSubsurface>(pSubsurface, m_pWindowParent.lock())).get();
+        PSUBSURFACE = m_vChildren.emplace_back(makeUnique<CSubsurface>(pSubsurface, m_pWindowParent.lock())).get();
     else if (m_pPopupParent)
-        PSUBSURFACE = m_vChildren.emplace_back(std::make_unique<CSubsurface>(pSubsurface, m_pPopupParent)).get();
+        PSUBSURFACE = m_vChildren.emplace_back(makeUnique<CSubsurface>(pSubsurface, m_pPopupParent)).get();
 
     ASSERT(PSUBSURFACE);
 

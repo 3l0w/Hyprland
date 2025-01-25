@@ -2,10 +2,13 @@
 
 #include <dlfcn.h>
 #include <ranges>
-#include "../Compositor.hpp"
+#include "../config/ConfigManager.hpp"
+#include "../managers/LayoutManager.hpp"
+#include "../managers/HookSystemManager.hpp"
+#include "../managers/eventLoop/EventLoopManager.hpp"
 
 CPluginSystem::CPluginSystem() {
-    g_pFunctionHookSystem = std::make_unique<CHookSystem>();
+    g_pFunctionHookSystem = makeUnique<CHookSystem>();
 }
 
 CPlugin* CPluginSystem::loadPlugin(const std::string& path) {
@@ -18,7 +21,7 @@ CPlugin* CPluginSystem::loadPlugin(const std::string& path) {
         return nullptr;
     }
 
-    auto* const PLUGIN = m_vLoadedPlugins.emplace_back(std::make_unique<CPlugin>()).get();
+    auto* const PLUGIN = m_vLoadedPlugins.emplace_back(makeUnique<CPlugin>()).get();
 
     PLUGIN->path = path;
 
@@ -80,7 +83,7 @@ CPlugin* CPluginSystem::loadPlugin(const std::string& path) {
     PLUGIN->version     = PLUGINDATA.version;
     PLUGIN->name        = PLUGINDATA.name;
 
-    g_pConfigManager->m_bForceReload = true;
+    g_pEventLoopManager->doLater([] { g_pConfigManager->reload(); });
 
     Debug::log(LOG, R"( [PluginSystem] Plugin {} loaded. Handle: {:x}, path: "{}", author: "{}", description: "{}", version: "{}")", PLUGINDATA.name, (uintptr_t)MODULE, path,
                PLUGINDATA.author, PLUGINDATA.description, PLUGINDATA.version);
@@ -135,7 +138,7 @@ void CPluginSystem::unloadPlugin(const CPlugin* plugin, bool eject) {
     Debug::log(LOG, " [PluginSystem] Plugin {} unloaded.", PLNAME);
 
     // reload config to fix some stuf like e.g. unloadedPluginVars
-    g_pConfigManager->m_bForceReload = true;
+    g_pEventLoopManager->doLater([] { g_pConfigManager->reload(); });
 }
 
 void CPluginSystem::unloadAllPlugins() {

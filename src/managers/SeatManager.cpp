@@ -7,6 +7,9 @@
 #include "../protocols/InputCapture.hpp"
 #include "../Compositor.hpp"
 #include "../devices/IKeyboard.hpp"
+#include "../desktop/LayerSurface.hpp"
+#include "../managers/input/InputManager.hpp"
+#include "../managers/HookSystemManager.hpp"
 #include "wlr-layer-shell-unstable-v1.hpp"
 #include <algorithm>
 #include <ranges>
@@ -193,7 +196,7 @@ void CSeatManager::setPointerFocus(SP<CWLSurfaceResource> surf, const Vector2D& 
     if (state.pointerFocus == surf)
         return;
 
-    if (PROTO::data->dndActive()) {
+    if (PROTO::data->dndActive() && surf) {
         if (state.dndPointerFocus == surf)
             return;
         Debug::log(LOG, "[seatmgr] Refusing pointer focus during an active dnd, but setting dndPointerFocus");

@@ -1,7 +1,13 @@
 #include "InputCapture.hpp"
-
 #include "managers/SeatManager.hpp"
 #include "render/Renderer.hpp"
+#include <fcntl.h>
+#include "hyprland-input-capture-v1.hpp"
+#include <memory>
+#include <vector>
+#include <wayland-util.h>
+#include "../devices/IKeyboard.hpp"
+#include "managers/SeatManager.hpp"
 #include <fcntl.h>
 
 CInputCaptureProtocol::CInputCaptureProtocol(const wl_interface* iface, const int& ver, const std::string& name) : IWaylandProtocol(iface, ver, name) {
@@ -9,7 +15,8 @@ CInputCaptureProtocol::CInputCaptureProtocol(const wl_interface* iface, const in
 }
 
 void CInputCaptureProtocol::bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id) {
-    const auto& RESOURCE = m_vManagers.emplace_back(std::make_unique<CHyprlandInputCaptureManagerV1>(client, ver, id));
+    // const auto& RESOURCE = m_vManagers.emplace_back(std::make_unique<CHyprlandInputCaptureManagerV1>(client, ver, id));
+    const auto& RESOURCE = m_vManagers.emplace_back(Hyprutils::Memory::makeUnique<CHyprlandInputCaptureManagerV1>(client, ver, id));
 
     RESOURCE->setOnDestroy([this](CHyprlandInputCaptureManagerV1* p) { std::erase_if(m_vManagers, [&](const auto& other) { return other->resource() == p->resource(); }); });
 
@@ -42,7 +49,7 @@ void CInputCaptureProtocol::sendMotion(const Vector2D& absolutePosition, const V
     }
 }
 
-void CInputCaptureProtocol::sendKeymap(SP<IKeyboard> keyboard, const std::unique_ptr<CHyprlandInputCaptureManagerV1>& manager) {
+void CInputCaptureProtocol::sendKeymap(SP<IKeyboard> keyboard, const Hyprutils::Memory::CUniquePointer<CHyprlandInputCaptureManagerV1>& manager) {
     if (!keyboard)
         return;
 

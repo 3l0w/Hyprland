@@ -3,7 +3,7 @@
 #include "protocols/core/Subcompositor.hpp"
 
 CFrogColorManager::CFrogColorManager(SP<CFrogColorManagementFactoryV1> resource_) : resource(resource_) {
-    if (!good())
+    if UNLIKELY (!good())
         return;
 
     resource->setDestroy([](CFrogColorManagementFactoryV1* r) { LOGM(TRACE, "Destroy frog_color_management at {:x} (generated default)", (uintptr_t)r); });
@@ -24,7 +24,7 @@ CFrogColorManager::CFrogColorManager(SP<CFrogColorManagementFactoryV1> resource_
 
         const auto RESOURCE = PROTO::frogColorManagement->m_vSurfaces.emplace_back(
             makeShared<CFrogColorManagementSurface>(makeShared<CFrogColorManagedSurface>(r->client(), r->version(), id), SURF));
-        if (!RESOURCE->good()) {
+        if UNLIKELY (!RESOURCE->good()) {
             r->noMemory();
             PROTO::frogColorManagement->m_vSurfaces.pop_back();
             return;
@@ -39,14 +39,14 @@ bool CFrogColorManager::good() {
 }
 
 CFrogColorManagementSurface::CFrogColorManagementSurface(SP<CFrogColorManagedSurface> resource_, SP<CWLSurfaceResource> surface_) : surface(surface_), resource(resource_) {
-    if (!good())
+    if UNLIKELY (!good())
         return;
 
     pClient = resource->client();
 
     if (!surface->colorManagement.valid()) {
         const auto RESOURCE = PROTO::colorManagement->m_vSurfaces.emplace_back(makeShared<CColorManagementSurface>(surface_));
-        if (!RESOURCE) {
+        if UNLIKELY (!RESOURCE) {
             resource->noMemory();
             PROTO::colorManagement->m_vSurfaces.pop_back();
             return;
@@ -92,7 +92,7 @@ CFrogColorManagementSurface::CFrogColorManagementSurface(SP<CFrogColorManagedSur
             case FROG_COLOR_MANAGED_SURFACE_TRANSFER_FUNCTION_SRGB:
                 surface->colorManagement->m_imageDescription.transferFunction = XX_COLOR_MANAGER_V4_TRANSFER_FUNCTION_SRGB;
 
-                surface->colorManagement->m_hasImageDescription = true;
+                surface->colorManagement->setHasImageDescription(true);
         }
     });
     resource->setSetKnownContainerColorVolume([this](CFrogColorManagedSurface* r, frogColorManagedSurfacePrimaries primariesName) {
@@ -103,12 +103,12 @@ CFrogColorManagementSurface::CFrogColorManagementSurface(SP<CFrogColorManagedSur
             case FROG_COLOR_MANAGED_SURFACE_PRIMARIES_REC2020: surface->colorManagement->m_imageDescription.primaries = NColorPrimaries::BT2020; break;
         }
 
-        surface->colorManagement->m_hasImageDescription = true;
+        surface->colorManagement->setHasImageDescription(true);
     });
     resource->setSetRenderIntent([this](CFrogColorManagedSurface* r, frogColorManagedSurfaceRenderIntent intent) {
         LOGM(TRACE, "Set frog cm intent {}", (uint32_t)intent);
-        pqIntentSent                                    = intent == FROG_COLOR_MANAGED_SURFACE_RENDER_INTENT_PERCEPTUAL;
-        surface->colorManagement->m_hasImageDescription = true;
+        pqIntentSent = intent == FROG_COLOR_MANAGED_SURFACE_RENDER_INTENT_PERCEPTUAL;
+        surface->colorManagement->setHasImageDescription(true);
     });
     resource->setSetHdrMetadata([this](CFrogColorManagedSurface* r, uint32_t r_x, uint32_t r_y, uint32_t g_x, uint32_t g_y, uint32_t b_x, uint32_t b_y, uint32_t w_x, uint32_t w_y,
                                        uint32_t max_lum, uint32_t min_lum, uint32_t cll, uint32_t fall) {
@@ -122,7 +122,7 @@ CFrogColorManagementSurface::CFrogColorManagementSurface(SP<CFrogColorManagedSur
         surface->colorManagement->m_imageDescription.maxCLL                  = cll;
         surface->colorManagement->m_imageDescription.maxFALL                 = fall;
 
-        surface->colorManagement->m_hasImageDescription = true;
+        surface->colorManagement->setHasImageDescription(true);
     });
 }
 
@@ -141,7 +141,7 @@ CFrogColorManagementProtocol::CFrogColorManagementProtocol(const wl_interface* i
 void CFrogColorManagementProtocol::bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id) {
     const auto RESOURCE = m_vManagers.emplace_back(makeShared<CFrogColorManager>(makeShared<CFrogColorManagementFactoryV1>(client, ver, id)));
 
-    if (!RESOURCE->good()) {
+    if UNLIKELY (!RESOURCE->good()) {
         wl_client_post_no_memory(client);
         m_vManagers.pop_back();
         return;

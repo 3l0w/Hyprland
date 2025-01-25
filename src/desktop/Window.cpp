@@ -17,6 +17,13 @@
 #include "../protocols/core/Compositor.hpp"
 #include "../xwayland/XWayland.hpp"
 #include "../helpers/Color.hpp"
+#include "../events/Events.hpp"
+#include "../managers/XWaylandManager.hpp"
+#include "../render/Renderer.hpp"
+#include "../managers/LayoutManager.hpp"
+#include "../managers/HookSystemManager.hpp"
+#include "../managers/EventManager.hpp"
+#include "../managers/input/InputManager.hpp"
 
 #include <hyprutils/string/String.hpp>
 
@@ -40,8 +47,8 @@ PHLWINDOW CWindow::create(SP<CXWaylandSurface> surface) {
     g_pAnimationManager->createAnimation(0.f, pWindow->m_fMovingToWorkspaceAlpha, g_pConfigManager->getAnimationPropertyConfig("fadeOut"), pWindow, AVARDAMAGE_ENTIRE);
     g_pAnimationManager->createAnimation(0.f, pWindow->m_fMovingFromWorkspaceAlpha, g_pConfigManager->getAnimationPropertyConfig("fadeIn"), pWindow, AVARDAMAGE_ENTIRE);
 
-    pWindow->addWindowDeco(std::make_unique<CHyprDropShadowDecoration>(pWindow));
-    pWindow->addWindowDeco(std::make_unique<CHyprBorderDecoration>(pWindow));
+    pWindow->addWindowDeco(makeUnique<CHyprDropShadowDecoration>(pWindow));
+    pWindow->addWindowDeco(makeUnique<CHyprBorderDecoration>(pWindow));
 
     return pWindow;
 }
@@ -63,8 +70,8 @@ PHLWINDOW CWindow::create(SP<CXDGSurfaceResource> resource) {
     g_pAnimationManager->createAnimation(0.f, pWindow->m_fMovingToWorkspaceAlpha, g_pConfigManager->getAnimationPropertyConfig("fadeOut"), pWindow, AVARDAMAGE_ENTIRE);
     g_pAnimationManager->createAnimation(0.f, pWindow->m_fMovingFromWorkspaceAlpha, g_pConfigManager->getAnimationPropertyConfig("fadeIn"), pWindow, AVARDAMAGE_ENTIRE);
 
-    pWindow->addWindowDeco(std::make_unique<CHyprDropShadowDecoration>(pWindow));
-    pWindow->addWindowDeco(std::make_unique<CHyprBorderDecoration>(pWindow));
+    pWindow->addWindowDeco(makeUnique<CHyprDropShadowDecoration>(pWindow));
+    pWindow->addWindowDeco(makeUnique<CHyprBorderDecoration>(pWindow));
 
     pWindow->m_pWLSurface->assign(pWindow->m_pXDGSurface->surface.lock(), pWindow);
 
@@ -275,6 +282,8 @@ void CWindow::updateWindowDecos() {
 
     // make a copy because updateWindow can remove decos.
     std::vector<IHyprWindowDecoration*> decos;
+    // reserve to avoid reallocations
+    decos.reserve(m_dWindowDecorations.size());
 
     for (auto const& wd : m_dWindowDecorations) {
         decos.push_back(wd.get());
@@ -287,7 +296,7 @@ void CWindow::updateWindowDecos() {
     }
 }
 
-void CWindow::addWindowDeco(std::unique_ptr<IHyprWindowDecoration> deco) {
+void CWindow::addWindowDeco(UP<IHyprWindowDecoration> deco) {
     m_dWindowDecorations.emplace_back(std::move(deco));
     g_pDecorationPositioner->forceRecalcFor(m_pSelf.lock());
     updateWindowDecos();
@@ -411,12 +420,13 @@ void CWindow::moveToWorkspace(PHLWORKSPACE pWorkspace) {
 
     static auto PCLOSEONLASTSPECIAL = CConfigValue<Hyprlang::INT>("misc:close_special_on_empty");
 
-    const auto  OLDWORKSPACE = m_pWorkspace;
+    const auto  OLDWORKSPACE     = m_pWorkspace;
+    const bool  TOANOTHERMONITOR = OLDWORKSPACE && OLDWORKSPACE->monitorID() != pWorkspace->monitorID();
 
     m_fMovingToWorkspaceAlpha->setValueAndWarp(1.F);
     *m_fMovingToWorkspaceAlpha = 0.F;
     m_fMovingToWorkspaceAlpha->setCallbackOnEnd([this](auto) { m_iMonitorMovedFrom = -1; });
-    m_iMonitorMovedFrom = OLDWORKSPACE ? OLDWORKSPACE->monitorID() : -1;
+    m_iMonitorMovedFrom = TOANOTHERMONITOR ? OLDWORKSPACE->monitorID() : -1;
 
     m_pWorkspace = pWorkspace;
 
@@ -444,7 +454,7 @@ void CWindow::moveToWorkspace(PHLWORKSPACE pWorkspace) {
     }
 
     // update xwayland coords
-    g_pXWaylandManager->setWindowSize(m_pSelf.lock(), m_vRealSize->value());
+    g_pXWaylandManager->setWindowSize(m_pSelf.lock(), m_vRealSize->goal());
 
     if (OLDWORKSPACE && g_pCompositor->isWorkspaceSpecial(OLDWORKSPACE->m_iID) && OLDWORKSPACE->getWindows() == 0 && *PCLOSEONLASTSPECIAL) {
         if (const auto PMONITOR = OLDWORKSPACE->m_pMonitor.lock(); PMONITOR)
@@ -558,8 +568,8 @@ void CWindow::onMap() {
     if (m_bIsX11)
         return;
 
-    m_pSubsurfaceHead = std::make_unique<CSubsurface>(m_pSelf.lock());
-    m_pPopupHead      = std::make_unique<CPopup>(m_pSelf.lock());
+    m_pSubsurfaceHead = makeUnique<CSubsurface>(m_pSelf.lock());
+    m_pPopupHead      = makeUnique<CPopup>(m_pSelf.lock());
 }
 
 void CWindow::onBorderAngleAnimEnd(WP<CBaseAnimatedVariable> pav) {
@@ -861,7 +871,7 @@ void CWindow::createGroup() {
         m_sGroupData.locked      = false;
         m_sGroupData.deny        = false;
 
-        addWindowDeco(std::make_unique<CHyprGroupBarDecoration>(m_pSelf.lock()));
+        addWindowDeco(makeUnique<CHyprGroupBarDecoration>(m_pSelf.lock()));
 
         if (m_pWorkspace) {
             m_pWorkspace->updateWindows();
@@ -1043,7 +1053,7 @@ void CWindow::insertWindowToGroup(PHLWINDOW pWindow) {
     const auto ENDAT   = m_sGroupData.pNextWindow.lock();
 
     if (!pWindow->getDecorationByType(DECORATION_GROUPBAR))
-        pWindow->addWindowDeco(std::make_unique<CHyprGroupBarDecoration>(pWindow));
+        pWindow->addWindowDeco(makeUnique<CHyprGroupBarDecoration>(pWindow));
 
     if (!pWindow->m_sGroupData.pNextWindow.lock()) {
         BEGINAT->m_sGroupData.pNextWindow = pWindow;
@@ -1265,6 +1275,14 @@ void CWindow::onWorkspaceAnimUpdate() {
     m_vFloatingOffset = offset;
 }
 
+void CWindow::onFocusAnimUpdate() {
+    // borderangle once
+    if (m_fBorderAngleAnimationProgress->enabled() && !m_fBorderAngleAnimationProgress->isBeingAnimated()) {
+        m_fBorderAngleAnimationProgress->setValueAndWarp(0.f);
+        *m_fBorderAngleAnimationProgress = 1.f;
+    }
+}
+
 int CWindow::popupsCount() {
     if (m_bIsX11)
         return 0;
@@ -1382,14 +1400,25 @@ void CWindow::activate(bool force) {
 }
 
 void CWindow::onUpdateState() {
-    std::optional<bool> requestsFS = m_pXDGSurface ? m_pXDGSurface->toplevel->state.requestsFullscreen : m_pXWaylandSurface->state.requestsFullscreen;
-    std::optional<bool> requestsMX = m_pXDGSurface ? m_pXDGSurface->toplevel->state.requestsMaximize : m_pXWaylandSurface->state.requestsMaximize;
+    std::optional<bool>      requestsFS = m_pXDGSurface ? m_pXDGSurface->toplevel->state.requestsFullscreen : m_pXWaylandSurface->state.requestsFullscreen;
+    std::optional<MONITORID> requestsID = m_pXDGSurface ? m_pXDGSurface->toplevel->state.requestsFullscreenMonitor : MONITOR_INVALID;
+    std::optional<bool>      requestsMX = m_pXDGSurface ? m_pXDGSurface->toplevel->state.requestsMaximize : m_pXWaylandSurface->state.requestsMaximize;
 
     if (requestsFS.has_value() && !(m_eSuppressedEvents & SUPPRESS_FULLSCREEN)) {
-        bool fs = requestsFS.value();
-        if (m_bIsMapped) {
-            g_pCompositor->changeWindowFullscreenModeClient(m_pSelf.lock(), FSMODE_FULLSCREEN, requestsFS.value());
+        if (requestsID.has_value() && (requestsID.value() != MONITOR_INVALID) && !(m_eSuppressedEvents & SUPPRESS_FULLSCREEN_OUTPUT)) {
+            if (m_bIsMapped) {
+                const auto monitor = g_pCompositor->getMonitorFromID(requestsID.value());
+                g_pCompositor->moveWindowToWorkspaceSafe(m_pSelf.lock(), monitor->activeWorkspace);
+                g_pCompositor->setActiveMonitor(monitor);
+            }
+
+            if (!m_bIsMapped)
+                m_iWantsInitialFullscreenMonitor = requestsID.value();
         }
+
+        bool fs = requestsFS.value();
+        if (m_bIsMapped)
+            g_pCompositor->changeWindowFullscreenModeClient(m_pSelf.lock(), FSMODE_FULLSCREEN, requestsFS.value());
 
         if (!m_bIsMapped)
             m_bWantsInitialFullscreen = fs;
@@ -1527,10 +1556,10 @@ void CWindow::onX11Configure(CBox box) {
         }
     }
 
-    m_vPosition = m_vRealPosition->value();
-    m_vSize     = m_vRealSize->value();
+    m_vPosition = m_vRealPosition->goal();
+    m_vSize     = m_vRealSize->goal();
 
-    m_pXWaylandSurface->configure(box);
+    g_pXWaylandManager->setWindowSize(m_pSelf.lock(), box.size(), true);
 
     m_vPendingReportedSize = box.size();
     m_vReportedSize        = box.size();
@@ -1540,7 +1569,7 @@ void CWindow::onX11Configure(CBox box) {
     if (!m_pWorkspace || !m_pWorkspace->isVisible())
         return; // further things are only for visible windows
 
-    m_pWorkspace = g_pCompositor->getMonitorFromVector(m_vRealPosition->value() + m_vRealSize->value() / 2.f)->activeWorkspace;
+    m_pWorkspace = g_pCompositor->getMonitorFromVector(m_vRealPosition->goal() + m_vRealSize->goal() / 2.f)->activeWorkspace;
 
     g_pCompositor->changeWindowZOrder(m_pSelf.lock(), true);
 

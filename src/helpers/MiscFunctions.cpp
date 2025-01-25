@@ -3,6 +3,9 @@
 #include <algorithm>
 #include "../Compositor.hpp"
 #include "../managers/TokenManager.hpp"
+#include "Monitor.hpp"
+#include "../config/ConfigManager.hpp"
+#include "fs/FsUtils.hpp"
 #include <optional>
 #include <cstring>
 #include <cmath>
@@ -258,7 +261,7 @@ SWorkspaceIDName getWorkspaceIDNameFromString(const std::string& in) {
         if (!valid(PWORKSPACE))
             return {WORKSPACE_INVALID};
 
-        const auto PLASTWORKSPACE = g_pCompositor->getWorkspaceByID(PWORKSPACE->m_sPrevWorkspace.id);
+        const auto PLASTWORKSPACE = g_pCompositor->getWorkspaceByID(PWORKSPACE->getPrevWorkspaceIDName().id);
 
         if (!PLASTWORKSPACE)
             return {WORKSPACE_INVALID};
@@ -619,7 +622,7 @@ void logSystemInfo() {
     // log etc
     Debug::log(LOG, "os-release:");
 
-    Debug::log(NONE, "{}", execAndGet("cat /etc/os-release"));
+    Debug::log(NONE, "{}", NFsUtils::readFileAsString("/etc/os-release").value_or("error"));
 }
 
 int64_t getPPIDof(int64_t pid) {
@@ -910,31 +913,4 @@ float stringToPercentage(const std::string& VALUE, const float REL) {
         return (std::stof(VALUE.substr(0, VALUE.length() - 1)) * REL) / 100.f;
     else
         return std::stof(VALUE);
-}
-
-bool executableExistsInPath(const std::string& exe) {
-    if (!getenv("PATH"))
-        return false;
-
-    static CVarList paths(getenv("PATH"), 0, ':', true);
-
-    for (auto& p : paths) {
-        std::string     path = p + std::string{"/"} + exe;
-        std::error_code ec;
-        if (!std::filesystem::exists(path, ec) || ec)
-            continue;
-
-        if (!std::filesystem::is_regular_file(path, ec) || ec)
-            continue;
-
-        auto stat = std::filesystem::status(path, ec);
-        if (ec)
-            continue;
-
-        auto perms = stat.permissions();
-
-        return std::filesystem::perms::none != (perms & std::filesystem::perms::others_exec);
-    }
-
-    return false;
 }

@@ -1,15 +1,16 @@
 #include "AnimationManager.hpp"
 #include "../Compositor.hpp"
 #include "HookSystemManager.hpp"
-#include "config/ConfigManager.hpp"
-#include "desktop/DesktopTypes.hpp"
-#include "helpers/AnimatedVariable.hpp"
-#include "macros.hpp"
+#include "../config/ConfigManager.hpp"
+#include "../desktop/DesktopTypes.hpp"
+#include "../helpers/AnimatedVariable.hpp"
+#include "../macros.hpp"
 #include "../config/ConfigValue.hpp"
 #include "../desktop/Window.hpp"
 #include "../desktop/LayerSurface.hpp"
 #include "eventLoop/EventLoopManager.hpp"
 #include "../helpers/varlist/VarList.hpp"
+#include "../render/Renderer.hpp"
 
 #include <hyprgraphics/color/Color.hpp>
 #include <hyprutils/animation/AnimatedVariable.hpp>
@@ -33,7 +34,8 @@ static int wlTick(SP<CEventLoopTimer> self, void* data) {
 
 CHyprAnimationManager::CHyprAnimationManager() {
     m_pAnimationTimer = SP<CEventLoopTimer>(new CEventLoopTimer(std::chrono::microseconds(500), wlTick, nullptr));
-    g_pEventLoopManager->addTimer(m_pAnimationTimer);
+    if (g_pEventLoopManager) // null in --verify-config mode
+        g_pEventLoopManager->addTimer(m_pAnimationTimer);
 
     addBezierWithName("linear", Vector2D(0.0, 0.0), Vector2D(1.0, 1.0));
 }
@@ -215,8 +217,9 @@ void CHyprAnimationManager::tick() {
     lastTick                                = std::chrono::high_resolution_clock::now();
 
     static auto PANIMENABLED = CConfigValue<Hyprlang::INT>("animations:enabled");
-    for (auto const& pav : m_vActiveAnimatedVariables) {
-        const auto PAV = pav.lock();
+
+    for (size_t i = 0; i < m_vActiveAnimatedVariables.size(); i++) {
+        const auto PAV = m_vActiveAnimatedVariables[i].lock();
         if (!PAV)
             continue;
 

@@ -6,6 +6,10 @@
 #include "../protocols/core/Compositor.hpp"
 #include "../managers/SeatManager.hpp"
 #include "../managers/eventLoop/EventLoopManager.hpp"
+#include "../desktop/LayerSurface.hpp"
+#include "../managers/input/InputManager.hpp"
+#include "../render/Renderer.hpp"
+#include "../render/OpenGL.hpp"
 #include <ranges>
 
 CPopup::CPopup(PHLWINDOW pOwner) : m_pWindowOwner(pOwner) {
@@ -85,7 +89,7 @@ void CPopup::onMap() {
 
     g_pInputManager->simulateMouseMovement();
 
-    m_pSubsurfaceHead = std::make_unique<CSubsurface>(this);
+    m_pSubsurfaceHead = makeUnique<CSubsurface>(this);
 
     //unconstrain();
     sendScale();

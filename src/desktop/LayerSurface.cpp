@@ -5,6 +5,12 @@
 #include "../protocols/core/Compositor.hpp"
 #include "../managers/SeatManager.hpp"
 #include "../managers/AnimationManager.hpp"
+#include "../render/Renderer.hpp"
+#include "../config/ConfigManager.hpp"
+#include "../helpers/Monitor.hpp"
+#include "../managers/input/InputManager.hpp"
+#include "../managers/HookSystemManager.hpp"
+#include "../managers/EventManager.hpp"
 
 PHLLS CLayerSurface::create(SP<CLayerShellResource> resource) {
     PHLLS pLS = SP<CLayerSurface>(new CLayerSurface(resource));
@@ -26,7 +32,7 @@ PHLLS CLayerSurface::create(SP<CLayerShellResource> resource) {
     pLS->szNamespace = resource->layerNamespace;
 
     pLS->layer     = resource->current.layer;
-    pLS->popupHead = std::make_unique<CPopup>(pLS);
+    pLS->popupHead = makeUnique<CPopup>(pLS);
     pLS->monitor   = pMonitor;
     pMonitor->m_aLayerSurfaceLayers[resource->current.layer].emplace_back(pLS);
 

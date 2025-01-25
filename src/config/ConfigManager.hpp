@@ -4,23 +4,24 @@
 #define CONFIG_MANAGER_H
 
 #include <map>
-#include "../debug/Log.hpp"
 #include <unordered_map>
 #include "../defines.hpp"
 #include <variant>
 #include <vector>
-#include <algorithm>
 #include <optional>
 #include <functional>
 #include <xf86drmMode.h>
-#include "../helpers/WLClasses.hpp"
 #include "../helpers/Monitor.hpp"
-#include "../helpers/varlist/VarList.hpp"
 #include "../desktop/Window.hpp"
-#include "../desktop/LayerSurface.hpp"
+#include "../desktop/LayerRule.hpp"
 
-#include "defaultConfig.hpp"
 #include "ConfigDataValues.hpp"
+#include "../SharedDefs.hpp"
+#include "../helpers/Color.hpp"
+#include "../desktop/DesktopTypes.hpp"
+#include "../helpers/memory/Memory.hpp"
+#include "../desktop/WindowRule.hpp"
+#include "../managers/XWaylandManager.hpp"
 
 #include <hyprlang.hpp>
 
@@ -132,12 +133,18 @@ struct SConfigOptionDescription {
     std::variant<SBoolData, SRangeData, SFloatData, SStringData, SColorData, SChoiceData, SGradientData, SVectorData> data;
 };
 
+struct SFirstExecRequest {
+    std::string exec      = "";
+    bool        withRules = false;
+};
+
 class CConfigManager {
   public:
     CConfigManager();
 
-    void                                                            tick();
     void                                                            init();
+    void                                                            reload();
+    std::string                                                     verify();
 
     int                                                             getDeviceInt(const std::string&, const std::string&, const std::string& fallback = "");
     float                                                           getDeviceFloat(const std::string&, const std::string&, const std::string& fallback = "");
@@ -196,7 +203,9 @@ class CConfigManager {
 
     // keywords
     std::optional<std::string>                                                                     handleRawExec(const std::string&, const std::string&);
+    std::optional<std::string>                                                                     handleExec(const std::string&, const std::string&);
     std::optional<std::string>                                                                     handleExecOnce(const std::string&, const std::string&);
+    std::optional<std::string>                                                                     handleExecRawOnce(const std::string&, const std::string&);
     std::optional<std::string>                                                                     handleExecShutdown(const std::string&, const std::string&);
     std::optional<std::string>                                                                     handleMonitor(const std::string&, const std::string&);
     std::optional<std::string>                                                                     handleBind(const std::string&, const std::string&);
@@ -249,16 +258,15 @@ class CConfigManager {
         {"scrollmouse", [](const PHLWINDOW& pWindow) { return &pWindow->m_sWindowData.scrollMouse; }},
         {"scrolltouchpad", [](const PHLWINDOW& pWindow) { return &pWindow->m_sWindowData.scrollTouchpad; }}};
 
-    bool m_bWantsMonitorReload = false;
-    bool m_bForceReload        = false;
-    bool m_bNoMonitorReload    = false;
-    bool isLaunchingExecOnce   = false; // For exec-once to skip initial ws tracking
+    bool m_bWantsMonitorReload                  = false;
+    bool m_bNoMonitorReload                     = false;
+    bool isLaunchingExecOnce                    = false; // For exec-once to skip initial ws tracking
+    bool m_bLastConfigVerificationWasSuccessful = true;
 
   private:
-    std::unique_ptr<Hyprlang::CConfig>               m_pConfig;
+    UP<Hyprlang::CConfig>                            m_pConfig;
 
-    std::vector<std::string>                         configPaths;       // stores all the config paths
-    std::unordered_map<std::string, time_t>          configModifyTimes; // stores modify times
+    std::vector<std::string>                         m_configPaths;
 
     Hyprutils::Animation::CAnimationConfigTree       m_AnimationTree;
 
@@ -280,7 +288,8 @@ class CConfigManager {
 
     bool                                             firstExecDispatched     = false;
     bool                                             m_bManualCrashInitiated = false;
-    std::vector<std::string>                         firstExecRequests;
+
+    std::vector<SFirstExecRequest>                   firstExecRequests; // bool is for if with rules
     std::vector<std::string>                         finalExecRequests;
 
     std::vector<std::pair<std::string, std::string>> m_vFailedPluginConfigValues; // for plugin values of unloaded plugins
@@ -293,8 +302,7 @@ class CConfigManager {
     std::optional<std::string> generateConfig(std::string configPath);
     std::optional<std::string> verifyConfigExists();
     void                       postConfigReload(const Hyprlang::CParseResult& result);
-    void                       reload();
     SWorkspaceRule             mergeWorkspaceRules(const SWorkspaceRule&, const SWorkspaceRule&);
 };
 
-inline std::unique_ptr<CConfigManager> g_pConfigManager;
+inline UP<CConfigManager> g_pConfigManager;

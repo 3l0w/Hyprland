@@ -4,6 +4,8 @@
 #include "../protocols/FractionalScale.hpp"
 #include "../protocols/SessionLock.hpp"
 #include "../managers/SeatManager.hpp"
+#include "../render/Renderer.hpp"
+#include "../managers/input/InputManager.hpp"
 #include <algorithm>
 #include <ranges>
 
@@ -55,7 +57,7 @@ void CSessionLockManager::onNewSessionLock(SP<CSessionLock> pLock) {
 
     Debug::log(LOG, "Session got locked by {:x}", (uintptr_t)pLock.get());
 
-    m_pSessionLock       = std::make_unique<SSessionLock>();
+    m_pSessionLock       = makeUnique<SSessionLock>();
     m_pSessionLock->lock = pLock;
     m_pSessionLock->mLockTimer.reset();
 
@@ -64,7 +66,7 @@ void CSessionLockManager::onNewSessionLock(SP<CSessionLock> pLock) {
 
         const auto PMONITOR = SURFACE->monitor();
 
-        const auto NEWSURFACE  = m_pSessionLock->vSessionLockSurfaces.emplace_back(std::make_unique<SSessionLockSurface>(SURFACE)).get();
+        const auto NEWSURFACE  = m_pSessionLock->vSessionLockSurfaces.emplace_back(makeUnique<SSessionLockSurface>(SURFACE)).get();
         NEWSURFACE->iMonitorID = PMONITOR->ID;
         PROTO::fractional->sendScale(SURFACE->surface(), PMONITOR->scale);
     });

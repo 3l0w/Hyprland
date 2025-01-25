@@ -1,6 +1,7 @@
 #include <re2/re2.h>
 
 #include "ConfigManager.hpp"
+#include "ConfigWatcher.hpp"
 #include "../managers/KeybindManager.hpp"
 #include "../Compositor.hpp"
 
@@ -11,8 +12,20 @@
 #include "../protocols/LayerShell.hpp"
 #include "../xwayland/XWayland.hpp"
 #include "../protocols/OutputManagement.hpp"
-#include "managers/AnimationManager.hpp"
+#include "../managers/AnimationManager.hpp"
+#include "../desktop/LayerSurface.hpp"
+#include "defaultConfig.hpp"
 
+#include "../render/Renderer.hpp"
+#include "../hyprerror/HyprError.hpp"
+#include "../managers/input/InputManager.hpp"
+#include "../managers/eventLoop/EventLoopManager.hpp"
+#include "../managers/LayoutManager.hpp"
+#include "../managers/EventManager.hpp"
+#include "../debug/HyprNotificationOverlay.hpp"
+#include "../plugins/PluginSystem.hpp"
+
+#include "managers/HookSystemManager.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <hyprutils/path/Path.hpp>
@@ -32,6 +45,7 @@
 #include <unordered_set>
 #include <hyprutils/string/String.hpp>
 #include <filesystem>
+#include <memory>
 using namespace Hyprutils::String;
 using namespace Hyprutils::Animation;
 
@@ -130,6 +144,18 @@ static void configHandleGapDestroy(void** data) {
         delete reinterpret_cast<CCssGapData*>(*data);
 }
 
+static Hyprlang::CParseResult handleExec(const char* c, const char* v) {
+    const std::string      VALUE   = v;
+    const std::string      COMMAND = c;
+
+    const auto             RESULT = g_pConfigManager->handleExec(COMMAND, VALUE);
+
+    Hyprlang::CParseResult result;
+    if (RESULT.has_value())
+        result.setError(RESULT.value().c_str());
+    return result;
+}
+
 static Hyprlang::CParseResult handleRawExec(const char* c, const char* v) {
     const std::string      VALUE   = v;
     const std::string      COMMAND = c;
@@ -147,6 +173,18 @@ static Hyprlang::CParseResult handleExecOnce(const char* c, const char* v) {
     const std::string      COMMAND = c;
 
     const auto             RESULT = g_pConfigManager->handleExecOnce(COMMAND, VALUE);
+
+    Hyprlang::CParseResult result;
+    if (RESULT.has_value())
+        result.setError(RESULT.value().c_str());
+    return result;
+}
+
+static Hyprlang::CParseResult handleExecRawOnce(const char* c, const char* v) {
+    const std::string      VALUE   = v;
+    const std::string      COMMAND = c;
+
+    const auto             RESULT = g_pConfigManager->handleExecRawOnce(COMMAND, VALUE);
 
     Hyprlang::CParseResult result;
     if (RESULT.has_value())
@@ -337,8 +375,8 @@ static Hyprlang::CParseResult handlePlugin(const char* c, const char* v) {
 CConfigManager::CConfigManager() {
     const auto ERR = verifyConfigExists();
 
-    configPaths.emplace_back(getMainConfigPath());
-    m_pConfig = std::make_unique<Hyprlang::CConfig>(configPaths.begin()->c_str(), Hyprlang::SConfigOptions{.throwAllErrors = true, .allowMissingConfig = true});
+    m_configPaths.emplace_back(getMainConfigPath());
+    m_pConfig = makeUnique<Hyprlang::CConfig>(m_configPaths.begin()->c_str(), Hyprlang::SConfigOptions{.throwAllErrors = true, .allowMissingConfig = true});
 
     m_pConfig->addConfigValue("general:border_size", Hyprlang::INT{1});
     m_pConfig->addConfigValue("general:no_border_on_floating", Hyprlang::INT{0});
@@ -619,8 +657,10 @@ CConfigManager::CConfigManager() {
     m_pConfig->addConfigValue("render:expand_undersized_textures", Hyprlang::INT{1});
     m_pConfig->addConfigValue("render:xp_mode", Hyprlang::INT{0});
     m_pConfig->addConfigValue("render:ctm_animation", Hyprlang::INT{2});
+    m_pConfig->addConfigValue("render:allow_early_buffer_release", Hyprlang::INT{1});
 
     m_pConfig->addConfigValue("ecosystem:no_update_news", Hyprlang::INT{0});
+    m_pConfig->addConfigValue("ecosystem:no_donation_nag", Hyprlang::INT{0});
 
     m_pConfig->addConfigValue("experimental:wide_color_gamut", Hyprlang::INT{0});
     m_pConfig->addConfigValue("experimental:hdr", Hyprlang::INT{0});
@@ -664,8 +704,10 @@ CConfigManager::CConfigManager() {
     m_pConfig->addSpecialConfigValue("device", "active_area_size", Hyprlang::VEC2{0, 0});     // only for tablets
 
     // keywords
-    m_pConfig->registerHandler(&::handleRawExec, "exec", {false});
+    m_pConfig->registerHandler(&::handleExec, "exec", {false});
+    m_pConfig->registerHandler(&::handleRawExec, "execr", {false});
     m_pConfig->registerHandler(&::handleExecOnce, "exec-once", {false});
+    m_pConfig->registerHandler(&::handleExecRawOnce, "execr-once", {false});
     m_pConfig->registerHandler(&::handleExecShutdown, "exec-shutdown", {false});
     m_pConfig->registerHandler(&::handleMonitor, "monitor", {false});
     m_pConfig->registerHandler(&::handleBind, "bind", {true});
@@ -689,15 +731,18 @@ CConfigManager::CConfigManager() {
 
     resetHLConfig();
 
-    Debug::log(INFO,
-               "!!!!HEY YOU, YES YOU!!!!: further logs to stdout / logfile are disabled by default. BEFORE SENDING THIS LOG, ENABLE THEM. Use debug:disable_logs = false to do so: "
-               "https://wiki.hyprland.org/Configuring/Variables/#debug");
+    if (!g_pCompositor->m_bOnlyConfigVerification) {
+        Debug::log(
+            INFO,
+            "!!!!HEY YOU, YES YOU!!!!: further logs to stdout / logfile are disabled by default. BEFORE SENDING THIS LOG, ENABLE THEM. Use debug:disable_logs = false to do so: "
+            "https://wiki.hyprland.org/Configuring/Variables/#debug");
+    }
 
     Debug::disableLogs = reinterpret_cast<int64_t* const*>(m_pConfig->getConfigValuePtr("debug:disable_logs")->getDataStaticPtr());
     Debug::disableTime = reinterpret_cast<int64_t* const*>(m_pConfig->getConfigValuePtr("debug:disable_time")->getDataStaticPtr());
 
-    if (ERR.has_value())
-        g_pHyprError->queueCreate(ERR.value(), CHyprColor{1.0, 0.1, 0.1, 1.0});
+    if (g_pEventLoopManager && ERR.has_value())
+        g_pEventLoopManager->doLater([ERR] { g_pHyprError->queueCreate(ERR.value(), CHyprColor{1.0, 0.1, 0.1, 1.0}); });
 }
 
 std::optional<std::string> CConfigManager::generateConfig(std::string configPath) {
@@ -756,7 +801,7 @@ std::string CConfigManager::getConfigString() {
     std::string configString;
     std::string currFileContent;
 
-    for (const auto& path : configPaths) {
+    for (const auto& path : m_configPaths) {
         std::ifstream configFile(path);
         configString += ("\n\nConfig File: " + path + ": ");
         if (!configFile.is_open()) {
@@ -779,9 +824,21 @@ void CConfigManager::reload() {
     EMIT_HOOK_EVENT("preConfigReload", nullptr);
     setDefaultAnimationVars();
     resetHLConfig();
-    configCurrentPath = getMainConfigPath();
-    const auto ERR    = m_pConfig->parse();
+    configCurrentPath                      = getMainConfigPath();
+    const auto ERR                         = m_pConfig->parse();
+    m_bLastConfigVerificationWasSuccessful = !ERR.error;
     postConfigReload(ERR);
+}
+
+std::string CConfigManager::verify() {
+    setDefaultAnimationVars();
+    resetHLConfig();
+    configCurrentPath                      = getMainConfigPath();
+    const auto ERR                         = m_pConfig->parse();
+    m_bLastConfigVerificationWasSuccessful = !ERR.error;
+    if (ERR.error)
+        return ERR.getError();
+    return "config ok";
 }
 
 void CConfigManager::setDefaultAnimationVars() {
@@ -844,10 +901,10 @@ std::optional<std::string> CConfigManager::resetHLConfig() {
     finalExecRequests.clear();
 
     // paths
-    configPaths.clear();
+    m_configPaths.clear();
     std::string mainConfigPath = getMainConfigPath();
     Debug::log(LOG, "Using config: {}", mainConfigPath);
-    configPaths.push_back(mainConfigPath);
+    m_configPaths.emplace_back(mainConfigPath);
 
     const auto RET = verifyConfigExists();
 
@@ -856,7 +913,10 @@ std::optional<std::string> CConfigManager::resetHLConfig() {
 
 void CConfigManager::postConfigReload(const Hyprlang::CParseResult& result) {
     static const auto PENABLEEXPLICIT     = CConfigValue<Hyprlang::INT>("render:explicit_sync");
+    static const auto PDISABLEAUTORELOAD  = CConfigValue<Hyprlang::INT>("misc:disable_autoreload");
     static int        prevEnabledExplicit = *PENABLEEXPLICIT;
+
+    g_pConfigWatcher->setWatchList(*PDISABLEAUTORELOAD ? std::vector<std::string>{} : m_configPaths);
 
     for (auto const& w : g_pCompositor->m_vWindows) {
         w->uncacheWindowDecos();
@@ -871,10 +931,11 @@ void CConfigManager::postConfigReload(const Hyprlang::CParseResult& result) {
         g_pInputManager->setPointerConfigs();
         g_pInputManager->setTouchDeviceConfigs();
         g_pInputManager->setTabletConfigs();
-    }
 
-    if (!isFirstLaunch)
         g_pHyprOpenGL->m_bReloadScreenShader = true;
+
+        g_pHyprOpenGL->ensureBackgroundTexturePresence();
+    }
 
     // parseError will be displayed next frame
 
@@ -887,7 +948,7 @@ void CConfigManager::postConfigReload(const Hyprlang::CParseResult& result) {
         g_pHyprError->queueCreate(result.getError(), CHyprColor(1.0, 50.0 / 255.0, 50.0 / 255.0, 1.0));
     else if (std::any_cast<Hyprlang::INT>(m_pConfig->getConfigValue("autogenerated")) == 1)
         g_pHyprError->queueCreate(
-            "Warning: You're using an autogenerated config! (config file: " + getMainConfigPath() +
+            "Warning: You're using an autogenerated config! Edit the config file to get rid of this message. (config file: " + getMainConfigPath() +
                 " )\nSUPER+Q -> kitty (if it doesn't launch, make sure it's installed or choose a different terminal in the config)\nSUPER+M -> exit Hyprland",
             CHyprColor(1.0, 1.0, 70.0 / 255.0, 1.0));
     else if (*PENABLEEXPLICIT != prevEnabledExplicit)
@@ -907,26 +968,16 @@ void CConfigManager::postConfigReload(const Hyprlang::CParseResult& result) {
     }
 
 #ifndef NO_XWAYLAND
-    const auto PENABLEXWAYLAND = std::any_cast<Hyprlang::INT>(m_pConfig->getConfigValue("xwayland:enabled"));
+    const auto PENABLEXWAYLAND      = std::any_cast<Hyprlang::INT>(m_pConfig->getConfigValue("xwayland:enabled"));
+    g_pCompositor->m_bWantsXwayland = PENABLEXWAYLAND;
     // enable/disable xwayland usage
-    if (!isFirstLaunch) {
-        bool prevEnabledXwayland = g_pCompositor->m_bEnableXwayland;
-        if (PENABLEXWAYLAND != prevEnabledXwayland) {
-            g_pCompositor->m_bEnableXwayland = PENABLEXWAYLAND;
-            if (PENABLEXWAYLAND) {
-                Debug::log(LOG, "xwayland has been enabled");
-            } else {
-                Debug::log(LOG, "xwayland has been disabled, cleaning up...");
-                for (auto& w : g_pCompositor->m_vWindows) {
-                    if (w->m_pXDGSurface || !w->m_bIsX11)
-                        continue;
-                    g_pCompositor->closeWindow(w);
-                }
-            }
-            g_pXWayland = std::make_unique<CXWayland>(g_pCompositor->m_bEnableXwayland);
-        }
+    if (!isFirstLaunch &&
+        g_pXWayland /* XWayland has to be initialized by CCompositor::initManagers for this to make sense, and it doesn't have to be (e.g. very early plugin load) */) {
+        bool prevEnabledXwayland = g_pXWayland->enabled();
+        if (g_pCompositor->m_bWantsXwayland != prevEnabledXwayland)
+            g_pXWayland = makeUnique<CXWayland>(g_pCompositor->m_bWantsXwayland);
     } else
-        g_pCompositor->m_bEnableXwayland = PENABLEXWAYLAND;
+        g_pCompositor->m_bWantsXwayland = PENABLEXWAYLAND;
 #endif
 
     if (!isFirstLaunch && !g_pCompositor->m_bUnsafeState)
@@ -989,16 +1040,13 @@ void CConfigManager::postConfigReload(const Hyprlang::CParseResult& result) {
 
 void CConfigManager::init() {
 
+    g_pConfigWatcher->setOnChange([this](const CConfigWatcher::SConfigWatchEvent& e) {
+        Debug::log(LOG, "CConfigManager: file {} modified, reloading", e.file);
+        reload();
+    });
+
     const std::string CONFIGPATH = getMainConfigPath();
     reload();
-
-    struct stat fileStat;
-    int         err = stat(CONFIGPATH.c_str(), &fileStat);
-    if (err != 0) {
-        Debug::log(WARN, "Error at statting config, error {}", errno);
-    }
-
-    configModifyTimes[CONFIGPATH] = fileStat.st_mtime;
 
     isFirstLaunch = false;
 }
@@ -1038,37 +1086,6 @@ std::string CConfigManager::parseKeyword(const std::string& COMMAND, const std::
     }
 
     return RET.error ? RET.getError() : "";
-}
-
-void CConfigManager::tick() {
-    std::string CONFIGPATH = getMainConfigPath();
-    if (!std::filesystem::exists(CONFIGPATH)) {
-        Debug::log(ERR, "Config doesn't exist??");
-        return;
-    }
-
-    bool parse = false;
-
-    for (auto const& cf : configPaths) {
-        struct stat fileStat;
-        int         err = stat(cf.c_str(), &fileStat);
-        if (err != 0) {
-            Debug::log(WARN, "Error at ticking config at {}, error {}: {}", cf, err, strerror(err));
-            continue;
-        }
-
-        // check if we need to reload cfg
-        if (fileStat.st_mtime != configModifyTimes[cf] || m_bForceReload) {
-            parse                 = true;
-            configModifyTimes[cf] = fileStat.st_mtime;
-        }
-    }
-
-    if (parse) {
-        m_bForceReload = false;
-
-        reload();
-    }
 }
 
 Hyprlang::CConfigValue* CConfigManager::getConfigValueSafeDevice(const std::string& dev, const std::string& val, const std::string& fallback) {
@@ -1439,7 +1456,7 @@ void CConfigManager::dispatchExecOnce() {
     isLaunchingExecOnce = true;
 
     for (auto const& c : firstExecRequests) {
-        handleRawExec("", c);
+        c.withRules ? handleExec("", c.exec) : handleRawExec("", c.exec);
     }
 
     firstExecRequests.clear(); // free some kb of memory :P
@@ -1660,7 +1677,7 @@ void CConfigManager::addExecRule(const SExecRequestedRule& rule) {
 }
 
 void CConfigManager::handlePluginLoads() {
-    if (g_pPluginSystem == nullptr)
+    if (!g_pPluginSystem)
         return;
 
     bool pluginsChanged = false;
@@ -1679,8 +1696,7 @@ void CConfigManager::handlePluginLoads() {
 
     if (pluginsChanged) {
         g_pHyprError->destroy();
-        m_bForceReload = true;
-        tick();
+        reload();
     }
 }
 
@@ -1742,7 +1758,17 @@ std::string CConfigManager::getDefaultWorkspaceFor(const std::string& name) {
 
 std::optional<std::string> CConfigManager::handleRawExec(const std::string& command, const std::string& args) {
     if (isFirstLaunch) {
-        firstExecRequests.push_back(args);
+        firstExecRequests.push_back({args, false});
+        return {};
+    }
+
+    g_pKeybindManager->spawnRaw(args);
+    return {};
+}
+
+std::optional<std::string> CConfigManager::handleExec(const std::string& command, const std::string& args) {
+    if (isFirstLaunch) {
+        firstExecRequests.push_back({args, true});
         return {};
     }
 
@@ -1752,7 +1778,14 @@ std::optional<std::string> CConfigManager::handleRawExec(const std::string& comm
 
 std::optional<std::string> CConfigManager::handleExecOnce(const std::string& command, const std::string& args) {
     if (isFirstLaunch)
-        firstExecRequests.push_back(args);
+        firstExecRequests.push_back({args, true});
+
+    return {};
+}
+
+std::optional<std::string> CConfigManager::handleExecRawOnce(const std::string& command, const std::string& args) {
+    if (isFirstLaunch)
+        firstExecRequests.push_back({args, false});
 
     return {};
 }
@@ -2053,7 +2086,12 @@ std::optional<std::string> CConfigManager::handleAnimation(const std::string& co
     if (enabledInt != 0 && enabledInt != 1)
         return "invalid animation on/off state";
 
-    int64_t speed = -1;
+    if (!enabledInt) {
+        m_AnimationTree.setConfigForNode(ANIMNAME, enabledInt, 1, "default");
+        return {};
+    }
+
+    float speed = -1;
 
     // speed
     if (isNumber(ARGS[2], true)) {
@@ -2670,16 +2708,8 @@ std::optional<std::string> CConfigManager::handleSource(const std::string& comma
             Debug::log(ERR, "source= file doesn't exist: {}", value);
             return "source= file " + value + " doesn't exist!";
         }
-        configPaths.push_back(value);
+        m_configPaths.emplace_back(value);
 
-        struct stat fileStat;
-        int         err = stat(value.c_str(), &fileStat);
-        if (err != 0) {
-            Debug::log(WARN, "Error at ticking config at {}, error {}: {}", value, err, strerror(err));
-            return {};
-        }
-
-        configModifyTimes[value]     = fileStat.st_mtime;
         auto configCurrentPathBackup = configCurrentPath;
         configCurrentPath            = value;
 

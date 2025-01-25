@@ -17,7 +17,6 @@
 #include "Shader.hpp"
 #include "Texture.hpp"
 #include "Framebuffer.hpp"
-#include "Transformer.hpp"
 #include "Renderbuffer.hpp"
 #include "pass/Pass.hpp"
 
@@ -134,6 +133,7 @@ struct SCurrentRenderData {
     Vector2D            primarySurfaceUVBottomRight = Vector2D(-1, -1);
 
     CBox                clipBox = {}; // scaled coordinates
+    CRegion             clipRegion;
 
     uint32_t            discardMode    = DISCARD_OPAQUE;
     float               discardOpacity = 0.f;
@@ -223,6 +223,8 @@ class CHyprOpenGLImpl {
 
     void         setDamage(const CRegion& damage, std::optional<CRegion> finalDamage = {});
 
+    void         ensureBackgroundTexturePresence();
+
     uint32_t     getPreferredReadFormat(PHLMONITOR pMonitor);
     std::vector<SDRMFormat>                     getDRMFormats();
     EGLImageKHR                                 createEGLImage(const Aquamarine::SDMABUFAttrs& attrs);
@@ -293,7 +295,7 @@ class CHyprOpenGLImpl {
     CShader                 m_sFinalScreenShader;
     CTimer                  m_tGlobalTimer;
 
-    SP<CTexture>            m_pMissingAssetTexture, m_pBackgroundTexture, m_pLockDeadTexture, m_pLockDead2Texture, m_pLockTtyTextTexture;
+    SP<CTexture>            m_pMissingAssetTexture, m_pBackgroundTexture, m_pLockDeadTexture, m_pLockDead2Texture, m_pLockTtyTextTexture; // TODO: don't always load lock
 
     void                    logShaderError(const GLuint&, bool program = false);
     GLuint                  createProgram(const std::string&, const std::string&, bool dynamic = false);
@@ -327,4 +329,4 @@ class CHyprOpenGLImpl {
     friend class CSurfacePassElement;
 };
 
-inline std::unique_ptr<CHyprOpenGLImpl> g_pHyprOpenGL;
+inline UP<CHyprOpenGLImpl> g_pHyprOpenGL;

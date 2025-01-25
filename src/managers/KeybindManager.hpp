@@ -49,6 +49,7 @@ enum eFocusWindowMode : uint8_t {
     MODE_INITIAL_CLASS_REGEX,
     MODE_TITLE_REGEX,
     MODE_INITIAL_TITLE_REGEX,
+    MODE_TAG_REGEX,
     MODE_ADDRESS,
     MODE_PID,
     MODE_ACTIVE_WINDOW
@@ -229,4 +230,4 @@ class CKeybindManager {
     friend class CPointerManager;
 };
 
-inline std::unique_ptr<CKeybindManager> g_pKeybindManager;
+inline UP<CKeybindManager> g_pKeybindManager;
