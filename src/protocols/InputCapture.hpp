@@ -28,7 +28,7 @@ class CInputCaptureProtocol : public IWaylandProtocol {
     void sendFrame();
 
   private:
-    void sendKeymap(SP<IKeyboard> keyboard, const std::unique_ptr<CHyprlandInputCaptureManagerV1>& manager);
+    void sendKeymap(SP<IKeyboard> keyboard, const Hyprutils::Memory::CUniquePointer<CHyprlandInputCaptureManagerV1>& manager);
 
     bool active = false;
     //
