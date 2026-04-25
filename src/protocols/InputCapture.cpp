@@ -53,6 +53,7 @@ CInputCaptureResource::CInputCaptureResource(SP<CHyprlandInputCaptureV1> resourc
             if (!m_keyRepeat.active || m_status != CLIENT_STATUS_ACTIVATED || !m_eis)
                 return;
 
+            m_eis->sendKey(m_keyRepeat.key, false);
             m_eis->sendKey(m_keyRepeat.key, true);
 
             if (m_keyRepeat.rate > 0)
