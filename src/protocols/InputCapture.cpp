@@ -41,7 +41,11 @@ CInputCaptureResource::CInputCaptureResource(SP<CHyprlandInputCaptureV1> resourc
 
     m_eis = makeUnique<CEis>("eis-" + std::to_string(eisCounter++));
 
-    m_resource->sendEisFd(m_eis->getFileDescriptor());
+    const int EISFD = m_eis->getFileDescriptor();
+    if (EISFD >= 0)
+        m_resource->sendEisFd(EISFD);
+    else
+        Log::logger->log(Log::ERR, "[input-capture]({}) failed to create EIS client fd", m_sessionId.c_str());
 
     m_keyRepeatTimer = makeShared<CEventLoopTimer>(
         std::nullopt,
