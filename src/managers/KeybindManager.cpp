@@ -589,7 +589,7 @@ SDispatchResult CKeybindManager::handleKeybinds(const uint32_t modmask, const SP
     }
 
     for (auto& k : m_keybinds) {
-        if (PROTO::inputCapture->isCaptured() && k->handler != "releaseinputcapture")
+        if (PROTO::inputCapture->isCaptured() && !k->allowInputCapture)
             continue;
 
         const bool SPECIALDISPATCHER = k->handler == "global" || k->handler == "pass" || k->handler == "sendshortcut" || k->handler == "mouse";
