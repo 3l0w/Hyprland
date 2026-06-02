@@ -98,7 +98,7 @@ namespace Config::Actions {
     ActionResult denyWindowFromGroup(eTogglableAction action);
     ActionResult moveIntoOrCreateGroup(Math::eDirection dir, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
 
-	ActionResult releaseInputCapture();
+    ActionResult releaseInputCapture();
 
     class CActionState {
       public:

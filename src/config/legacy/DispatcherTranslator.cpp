@@ -860,5 +860,5 @@ CDispatcherTranslator::CDispatcherTranslator() {
     m_dispMap["global"]                         = ::globalDispatcher;
     m_dispMap["setprop"]                        = ::setprop;
     m_dispMap["forceidle"]                      = ::forceidle;
-	m_dispMap["releaseinputcapture"]			= ::releaseInputCapture;
+    m_dispMap["releaseinputcapture"]            = ::releaseInputCapture;
 }

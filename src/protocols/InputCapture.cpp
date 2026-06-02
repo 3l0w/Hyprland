@@ -106,14 +106,14 @@ enum eValidResult : uint8_t {
 };
 
 static eValidResult isBarrierValidAgainstMonitor(int x1, int y1, int x2, int y2, PHLMONITOR monitor) {
-    int        mx1 = monitor->m_position.x;
-    int        my1 = monitor->m_position.y;
+    int       mx1 = monitor->m_position.x;
+    int       my1 = monitor->m_position.y;
 
-    const int  width  = static_cast<int>(monitor->m_size.x);
-    const int  height = static_cast<int>(monitor->m_size.y);
+    const int width  = static_cast<int>(monitor->m_size.x);
+    const int height = static_cast<int>(monitor->m_size.y);
 
-    int        mx2 = mx1 + width - 1;
-    int        my2 = my1 + height - 1;
+    int       mx2 = mx1 + width - 1;
+    int       my2 = my1 + height - 1;
 
     if (x1 == x2) {                     //If zone is vertical
         if (x1 != mx1 && x1 != mx2 + 1) //If the zone don't touch the left or right side

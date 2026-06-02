@@ -710,7 +710,7 @@ std::vector<SP<IValue>> Values::getConfigValues() {
 
         MS<Bool>("experimental:wp_cm_1_2", "Allow wp-cm-v1 version 2", false),
 
-		/*
+        /*
 		 * inputcapture: 
 		 */
         MS<Bool>("inputcapture:capture_modifiers", "If enabled, modifiers are also captured and sent to the program", false),

@@ -1720,6 +1720,6 @@ ActionResult Actions::moveIntoOrCreateGroup(Math::eDirection dir, std::optional<
 }
 
 ActionResult Actions::releaseInputCapture() {
-	PROTO::inputCapture->forceRelease();
-	return {};
+    PROTO::inputCapture->forceRelease();
+    return {};
 }

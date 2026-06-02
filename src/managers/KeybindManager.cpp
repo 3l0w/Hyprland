@@ -108,7 +108,7 @@ CKeybindManager::CKeybindManager() {
                              "global",
                              "setprop",
                              "forceidle",
-							 "releaseinputcapture"}) {
+                             "releaseinputcapture"}) {
         m_dispatchers[name] = [n = std::string(name)](std::string args) -> SDispatchResult { return Config::Legacy::translator()->run(n, args); };
     }
 
