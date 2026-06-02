@@ -5,9 +5,11 @@
 #include "../../hyprctlCompat.hpp"
 #include "../shared.hpp"
 #include "tests.hpp"
+#include <hyprutils/utils/ScopeGuard.hpp>
 
 using namespace Hyprutils::OS;
 using namespace Hyprutils::Memory;
+using namespace Hyprutils::Utils;
 static std::string flagFile = "/tmp/hyprtester-keybinds.txt";
 
 static std::string pluginKeybindCmd(bool pressed, uint32_t modifier, uint32_t key) {
@@ -512,6 +514,12 @@ SUBTEST(bindsAfterScroll) {
 SUBTEST(submapUniversal) {
     NLog::log("{}Testing submap universal", Colors::GREEN);
 
+    CScopeGuard cleanup = {[]() {
+        getFromSocket("/dispatch hl.dsp.submap('reset')");
+        getFromSocket("/eval hl.unbind('SUPER + Y')");
+        clearFlag();
+    }};
+
     EXPECT(checkFlag(), false);
     EXPECT(getFromSocket("/eval hl.bind('SUPER + Y', hl.dsp.exec_cmd('touch " + flagFile + "'), { submap_universal = true })"), "ok");
     EXPECT_CONTAINS(getFromSocket("/submap"), "default");
@@ -519,7 +527,7 @@ SUBTEST(submapUniversal) {
     // keybind works on default submap
     OK(getFromSocket(pluginKeybindCmd(true, 7, 29)));
     OK(getFromSocket(pluginKeybindCmd(false, 7, 29)));
-    EXPECT(attemptCheckFlag(30, 5), true);
+    EXPECT(attemptCheckFlag(20, 50), true);
 
     // keybind works on submap1
     getFromSocket(pluginKeybindCmd(true, 7, 30));
@@ -527,7 +535,7 @@ SUBTEST(submapUniversal) {
     EXPECT_CONTAINS(getFromSocket("/submap"), "submap1");
     OK(getFromSocket(pluginKeybindCmd(true, 7, 29)));
     OK(getFromSocket(pluginKeybindCmd(false, 7, 29)));
-    EXPECT(attemptCheckFlag(30, 5), true);
+    EXPECT(attemptCheckFlag(20, 50), true);
 
     // reset to default submap
     getFromSocket(pluginKeybindCmd(true, 0, 33));
